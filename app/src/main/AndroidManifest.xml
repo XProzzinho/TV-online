@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!-- App de TV: não precisa de tela de toque -->
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+
+    <application
+        android:allowBackup="true"
+        android:banner="@drawable/banner"
+        android:icon="@drawable/icone"
+        android:label="@string/app_name"
+        android:theme="@style/Tema"
+        android:usesCleartextTraffic="true">
+
+        <!-- Tela principal: TV ao vivo e Filmes e Séries -->
+        <activity
+            android:name=".IptvActivity"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|uiMode"
+            android:exported="true"
+            android:screenOrientation="landscape">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".PlayerActivity"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|uiMode"
+            android:exported="false"
+            android:screenOrientation="landscape"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
+
+        <!-- Links das listas, mandados pelo Controle TV -->
+        <receiver
+            android:name=".ConfigReceiver"
+            android:exported="true" />
+
+        <!-- Entrega o APK da atualização para o instalador -->
+        <provider
+            android:name=".ApkProvider"
+            android:authorities="com.geanalves.tvonline.apk"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+    </application>
+</manifest>

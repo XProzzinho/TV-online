@@ -159,6 +159,26 @@ class IptvActivity : Activity() {
             troca.addView(b)
         }
         tituloRow.addView(troca)
+        // Botão "Listas": colocar os links direto na TV
+        val listasBg = redondo(Cores.janela, dpf(26))
+        tituloRow.addView(
+            TextView(this).apply {
+                text = "＋ Listas"
+                textSize = 16f
+                setTextColor(Cores.tinta)
+                background = listasBg
+                elevation = dpf(3)
+                setPadding(dp(20), dp(14), dp(20), dp(14))
+                isFocusable = true
+                isClickable = true
+                setOnClickListener { abrirListas() }
+                setOnFocusChangeListener { _, has ->
+                    listasBg.setColor(if (has) Cores.tinta else Cores.janela)
+                    setTextColor(if (has) Cores.papel else Cores.tinta)
+                }
+            },
+            LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(12) },
+        )
         col.addView(tituloRow)
         abasRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -241,6 +261,101 @@ class IptvActivity : Activity() {
                 }
             }
         }
+    }
+
+    // ---------- listas (links colocados na própria TV) ----------
+
+    private fun abrirListas() {
+        val d = android.app.Dialog(this)
+        d.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        d.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = redondo(Cores.janela, dpf(28))
+            setPadding(dp(36), dp(28), dp(36), dp(26))
+        }
+        box.addView(TextView(this).apply {
+            text = "Suas listas"
+            textSize = 26f
+            setTextColor(Cores.tinta)
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+        })
+        box.addView(TextView(this).apply {
+            text = "Cole ou digite o link (M3U) e aperte Salvar. Pode ser o mesmo link nas duas: o app separa sozinho."
+            textSize = 15f
+            setTextColor(Cores.cinza)
+            setPadding(0, dp(4), 0, dp(14))
+        })
+
+        fun campo(rotulo: String, atual: String?): android.widget.EditText {
+            box.addView(TextView(this).apply {
+                text = rotulo
+                textSize = 15f
+                setTextColor(Cores.tinta)
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(dp(4), dp(8), 0, dp(6))
+            })
+            val bg = redondo(Cores.campo, dpf(16))
+            val e = android.widget.EditText(this).apply {
+                setText(atual ?: "")
+                hint = "http://…"
+                textSize = 17f
+                setTextColor(Cores.tinta)
+                setHintTextColor(Cores.cinza)
+                background = bg
+                isSingleLine = true
+                inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
+                setPadding(dp(18), dp(12), dp(18), dp(12))
+                setOnFocusChangeListener { _, has -> bg.setStroke(if (has) dp(3) else 0, Cores.tinta) }
+            }
+            box.addView(e, LinearLayout.LayoutParams(dp(640), -2))
+            return e
+        }
+        val aoVivo = campo("● TV ao vivo", Iptv.aoVivo.link(this))
+        val vod = campo("Filmes e Séries", Iptv.vod.link(this))
+
+        fun botao(t: String, escuro: Boolean = false, acao: () -> Unit) = TextView(this).apply {
+            text = t
+            textSize = 17f
+            val bg = redondo(if (escuro) Cores.tinta else Cores.campo, dpf(22))
+            background = bg
+            setTextColor(if (escuro) Cores.papel else Cores.tinta)
+            setPadding(dp(22), dp(10), dp(22), dp(10))
+            isFocusable = true
+            isClickable = true
+            setOnClickListener { acao() }
+            setOnFocusChangeListener { v, has ->
+                v.animate().scaleX(if (has) 1.06f else 1f).scaleY(if (has) 1.06f else 1f).setDuration(120).start()
+                bg.setStroke(if (has) dp(3) else 0, if (escuro) Cores.campo else Cores.tinta)
+            }
+        }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(22), 0, 0)
+            clipChildren = false
+        }
+        row.addView(botao("Salvar", escuro = true) {
+            fun ok(l: String) = l.isBlank() || l.startsWith("http")
+            val a = aoVivo.text.toString().trim()
+            val b = vod.text.toString().trim()
+            if (!ok(a) || !ok(b)) {
+                Toast.makeText(this, "O link precisa começar com http", Toast.LENGTH_LONG).show()
+                return@botao
+            }
+            if (a != (Iptv.aoVivo.link(this) ?: "")) Iptv.aoVivo.salvarLink(this, a)
+            if (b != (Iptv.vod.link(this) ?: "")) Iptv.vod.salvarLink(this, b)
+            Toast.makeText(this, "Listas salvas", Toast.LENGTH_SHORT).show()
+            d.dismiss()
+            carregar(true)
+        }, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(12) })
+        row.addView(botao("Canais abertos do Brasil") {
+            aoVivo.setText("https://iptv-org.github.io/iptv/countries/br.m3u")
+        }, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(12) })
+        row.addView(botao("Cancelar") { d.dismiss() })
+        box.addView(row)
+        d.setContentView(box)
+        d.show()
+        aoVivo.requestFocus()
     }
 
     // ---------- versão nova ----------
@@ -347,8 +462,7 @@ class IptvActivity : Activity() {
                 null -> mostrar()
                 "sem lista" -> vazio(
                     (if (ehVod) "Nenhuma lista de filmes e séries ainda.\n" else "Nenhuma lista de canais ainda.\n") +
-                        "No celular, abra o Controle TV › Administração › " +
-                        (if (ehVod) "Filmes e Séries" else "TV ao vivo") + " e cole o link da lista M3U.",
+                        "Aperte OK para colocar o link da lista aqui na TV (ou mande pelo Controle TV).",
                 )
                 else -> vazio("$erro. Confira a internet e o link da lista, e aperte OK para tentar de novo.")
             }
@@ -367,7 +481,7 @@ class IptvActivity : Activity() {
             setPadding(dp(28), dp(24), dp(28), dp(24))
             isFocusable = true
             isClickable = true
-            setOnClickListener { carregar(true) }
+            setOnClickListener { if (Iptv.atual.link(this@IptvActivity) == null) abrirListas() else carregar(true) }
         }
         conteudo.addView(t, LinearLayout.LayoutParams(-1, -2))
     }

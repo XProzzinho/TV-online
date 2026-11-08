@@ -59,6 +59,14 @@ class IptvActivity : Activity() {
     private var girar: Runnable? = null
     private var episodios: Map<String, List<Iptv.Canal>> = emptyMap()
     private var modoVod = false
+    private lateinit var relogio: TextView
+    private val horaFmt = java.text.SimpleDateFormat("HH:mm", java.util.Locale("pt", "BR"))
+    private val tique = object : Runnable {
+        override fun run() {
+            relogio.text = horaFmt.format(java.util.Date())
+            h.postDelayed(this, 20_000)
+        }
+    }
     private lateinit var abasRow: LinearLayout
     private val botoesModo = ArrayList<TextView>()
 
@@ -100,8 +108,28 @@ class IptvActivity : Activity() {
     }
 
     private fun montar(): View {
+        // Tema "Noite profunda": quase preto, com um brilho azulado no alto e um vermelho bem fraco embaixo
+        val dm = resources.displayMetrics
+        val brilhoAlto = GradientDrawable().apply {
+            gradientType = GradientDrawable.RADIAL_GRADIENT
+            gradientRadius = dm.widthPixels * 0.55f
+            setGradientCenter(0.78f, 0.0f)
+            colors = intArrayOf(0x40505A8C, 0x00000000)
+        }
+        val brilhoBaixo = GradientDrawable().apply {
+            gradientType = GradientDrawable.RADIAL_GRADIENT
+            gradientRadius = dm.widthPixels * 0.45f
+            setGradientCenter(0.0f, 1.0f)
+            colors = intArrayOf(0x1AFF3B30, 0x00000000)
+        }
         val root = FrameLayout(this).apply {
-            background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(Cores.fundoTopo, Cores.fundoBase))
+            background = android.graphics.drawable.LayerDrawable(
+                arrayOf(
+                    GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(Cores.fundoTopo, Cores.fundoBase)),
+                    brilhoAlto,
+                    brilhoBaixo,
+                ),
+            )
         }
         val scroll = ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
@@ -117,30 +145,38 @@ class IptvActivity : Activity() {
         scroll.addView(col)
         root.addView(scroll, FrameLayout.LayoutParams(-1, -1))
 
-        // Igual à tela inicial: linha pequena cinza + título grande + abas
         info = TextView(this).apply {
-            textSize = 17f
+            textSize = 14f
             setTextColor(Cores.cinza)
             text = nomeTela
         }
-        col.addView(info)
         titulo = TextView(this).apply {
-            textSize = 36f
-            setTextColor(Cores.tinta)
-            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+            visibility = View.GONE
             text = Iptv.atual.abas[abaAtual]
         }
-        // Título + troca entre "TV ao vivo" e "Filmes e Séries" no canto
+        // Topo: logo com a bolinha vermelha, troca de modo, Listas e relógio
         val tituloRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            clipChildren = false
         }
-        tituloRow.addView(titulo, LinearLayout.LayoutParams(0, -2, 1f))
+        val logo = android.text.SpannableString("●  TV Online")
+        logo.setSpan(android.text.style.ForegroundColorSpan(Cores.vivo), 0, 1, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        logo.setSpan(android.text.style.RelativeSizeSpan(0.6f), 0, 1, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        tituloRow.addView(
+            TextView(this).apply {
+                text = logo
+                textSize = 28f
+                setTextColor(Cores.tinta)
+                typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+                letterSpacing = -0.02f
+            },
+            LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(24) },
+        )
         val troca = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            background = redondo(Cores.janela, dpf(26))
-            elevation = dpf(3)
-            setPadding(dp(6), dp(6), dp(6), dp(6))
+            background = redondo(Cores.janela, dpf(26)).apply { setStroke(dp(1), Cores.linha) }
+            setPadding(dp(5), dp(5), dp(5), dp(5))
         }
         listOf("● TV ao vivo" to false, "Filmes e Séries" to true).forEach { (nome, vod) ->
             val bg = redondo(Color.TRANSPARENT, dpf(20))
@@ -159,16 +195,16 @@ class IptvActivity : Activity() {
             troca.addView(b)
         }
         tituloRow.addView(troca)
+        tituloRow.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
         // Botão "Listas": colocar os links direto na TV
-        val listasBg = redondo(Cores.janela, dpf(26))
+        val listasBg = redondo(Cores.janela, dpf(26)).apply { setStroke(dp(1), Cores.linha) }
         tituloRow.addView(
             TextView(this).apply {
                 text = "＋ Listas"
                 textSize = 16f
                 setTextColor(Cores.tinta)
                 background = listasBg
-                elevation = dpf(3)
-                setPadding(dp(20), dp(14), dp(20), dp(14))
+                setPadding(dp(20), dp(12), dp(20), dp(12))
                 isFocusable = true
                 isClickable = true
                 setOnClickListener { abrirListas() }
@@ -179,10 +215,20 @@ class IptvActivity : Activity() {
             },
             LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(12) },
         )
+        relogio = TextView(this).apply {
+            textSize = 30f
+            setTextColor(Cores.tinta)
+            typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+            fontFeatureSettings = "tnum"
+        }
+        tituloRow.addView(relogio, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(22) })
         col.addView(tituloRow)
+        col.addView(info, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10) })
+        h.post(tique)
         abasRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(6), 0, dp(18))
+            setPadding(0, dp(16), 0, dp(18))
+            clipChildren = false
         }
         col.addView(abasRow)
         montarAbas()
@@ -204,8 +250,8 @@ class IptvActivity : Activity() {
             val bg = redondo(Color.TRANSPARENT, dpf(20))
             val t = TextView(this).apply {
                 text = nome
-                textSize = 17f
-                setPadding(dp(14), dp(6), dp(14), dp(6))
+                textSize = 16f
+                setPadding(dp(18), dp(8), dp(18), dp(8))
                 background = bg
                 isFocusable = true
                 isClickable = true
@@ -225,7 +271,7 @@ class IptvActivity : Activity() {
                 }
             }
             abas += t
-            abasRow.addView(t, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(6) })
+            abasRow.addView(t, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(10) })
         }
         pintarAbas()
     }
@@ -246,20 +292,11 @@ class IptvActivity : Activity() {
         for (b in botoesModo) {
             val bg = b.background as GradientDrawable
             val meu = b.tag == modoVod
-            when {
-                b.isFocused -> {
-                    bg.setColor(Cores.tinta)
-                    b.setTextColor(Cores.papel)
-                }
-                meu -> {
-                    bg.setColor(Cores.campo)
-                    b.setTextColor(Cores.tinta)
-                }
-                else -> {
-                    bg.setColor(Color.TRANSPARENT)
-                    b.setTextColor(Cores.cinza)
-                }
-            }
+            bg.setColor(if (meu) Cores.tinta else Color.TRANSPARENT)
+            bg.setStroke(if (b.isFocused) dp(2) else 0, if (meu) Cores.vivo else Cores.tinta)
+            b.setTextColor(if (meu) Cores.papel else if (b.isFocused) Cores.tinta else Cores.cinza)
+            b.typeface = if (meu) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+            b.animate().scaleX(if (b.isFocused) 1.06f else 1f).scaleY(if (b.isFocused) 1.06f else 1f).setDuration(120).start()
         }
     }
 
@@ -437,20 +474,12 @@ class IptvActivity : Activity() {
     private fun pintarAbas() {
         abas.forEachIndexed { i, t ->
             val bg = t.background as GradientDrawable
-            when {
-                t.isFocused -> {
-                    bg.setColor(Cores.tinta)
-                    t.setTextColor(Cores.papel)
-                }
-                i == abaAtual -> {
-                    bg.setColor(Cores.sutil)
-                    t.setTextColor(Cores.tinta)
-                }
-                else -> {
-                    bg.setColor(Color.TRANSPARENT)
-                    t.setTextColor(Cores.cinza)
-                }
-            }
+            val on = t.isFocused || i == abaAtual
+            bg.setColor(if (on) Cores.tinta else Color.TRANSPARENT)
+            bg.setStroke(dp(1), if (on) Cores.tinta else 0x29FFFFFF)
+            t.setTextColor(if (on) Cores.papel else Cores.cinza)
+            t.typeface = if (i == abaAtual) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+            t.animate().scaleX(if (t.isFocused) 1.08f else 1f).scaleY(if (t.isFocused) 1.08f else 1f).setDuration(120).start()
         }
     }
 
@@ -527,7 +556,7 @@ class IptvActivity : Activity() {
 
         // 1) Destaque grande + dois cartões altos
         if (daAba.size >= 3) {
-            conteudo.addView(linhaDestaque(daAba), LinearLayout.LayoutParams(-1, dp(250)).apply { bottomMargin = dp(24) })
+            conteudo.addView(linhaDestaque(daAba), LinearLayout.LayoutParams(-1, dp(270)).apply { bottomMargin = dp(26) })
         }
 
         // 2) Os grupos da lista dentro desta aba, em blocos (como Gênero, Nacional, No ar)
@@ -577,7 +606,7 @@ class IptvActivity : Activity() {
     /** Bloco de categoria: branco com o nome e a quantidade; o escolhido fica com contorno. */
     private fun blocoGrupo(g: String?, qtd: Int): View {
         val escolhido = g == subgrupo
-        val bg = redondo(Cores.janela, dpf(18)).apply { if (escolhido) setStroke(dp(2), Cores.tinta) }
+        val bg = redondo(Cores.janela, dpf(18)).apply { setStroke(if (escolhido) dp(2) else dp(1), if (escolhido) Cores.tinta else Cores.linha) }
         val nome = TextView(this).apply {
             text = g ?: "Tudo"
             textSize = 16f
@@ -623,7 +652,7 @@ class IptvActivity : Activity() {
         }
         val roda = lista.take(4)
         var atual = 0
-        val bg = redondo(Cores.janela, dpf(22))
+        val bg = redondo(Cores.janela, dpf(22)).apply { setStroke(dp(1), Cores.linha) }
         val anel = GradientDrawable().apply {
             cornerRadius = dpf(22)
             setColor(Color.TRANSPARENT)
@@ -638,7 +667,7 @@ class IptvActivity : Activity() {
             textSize = 13f
             setTextColor(Color.WHITE)
             typeface = Typeface.DEFAULT_BOLD
-            background = redondo(if (ehVod) Cores.tinta else 0xFFFF3B30.toInt(), dpf(12))
+            background = redondo(if (ehVod) Cores.tinta else Cores.vivo, dpf(8))
             if (ehVod) setTextColor(Cores.papel)
             setPadding(dp(10), dp(4), dp(10), dp(4))
         }
@@ -654,11 +683,14 @@ class IptvActivity : Activity() {
             textSize = 16f
             setTextColor(Cores.cinza)
         }
+        // Botão branco "▶ Assistir" (o destaque inteiro é o botão: OK abre)
         val dica = TextView(this).apply {
-            text = "OK para assistir"
-            textSize = 14f
-            setTextColor(Cores.cinza)
-            setPadding(0, dp(14), 0, 0)
+            text = "▶  Assistir"
+            textSize = 15f
+            setTextColor(Cores.papel)
+            typeface = Typeface.DEFAULT_BOLD
+            background = redondo(Cores.tinta, dpf(22))
+            setPadding(dp(20), dp(9), dp(22), dp(9))
         }
         val pontos = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val bolinhas = roda.map {
@@ -670,7 +702,7 @@ class IptvActivity : Activity() {
             addView(aoVivo, LinearLayout.LayoutParams(-2, -2))
             addView(nome)
             addView(grupo)
-            addView(dica)
+            addView(dica, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(16) })
         }
         val corpo = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -723,20 +755,75 @@ class IptvActivity : Activity() {
             v.animate().scaleX(if (has) 1.02f else 1f).scaleY(if (has) 1.02f else 1f)
                 .translationZ(if (has) dpf(8) else 0f).setDuration(140).start()
         }
-        linha.addView(destaque, LinearLayout.LayoutParams(0, -1, 2.2f).apply { rightMargin = dp(16) })
-        // Dois cartões altos ao lado
-        val altos = lista.drop(4).take(2).ifEmpty { lista.drop(1).take(2) }
+        linha.addView(destaque, LinearLayout.LayoutParams(0, -1, 2.3f).apply { rightMargin = dp(22) })
+        // Coluna "A seguir nos favoritos" (ou os próximos canais) ao lado do destaque
         val favs = Iptv.atual.favoritos(this)
-        altos.forEachIndexed { k, c ->
-            val lp = LinearLayout.LayoutParams(0, -1, 1f)
-            if (k == 0) lp.rightMargin = dp(16)
-            linha.addView(cartao(c, lista, lista.indexOf(c), c.url in favs), lp)
+        val doLado = lista.filter { it.url in favs && it !in roda }.ifEmpty { lista.drop(roda.size) }.take(3)
+        val lado = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            clipChildren = false
+            clipToPadding = false
         }
+        lado.addView(TextView(this).apply {
+            text = if (lista.any { it.url in favs }) "A SEGUIR NOS FAVORITOS" else "MAIS CANAIS"
+            textSize = 12f
+            letterSpacing = 0.12f
+            setTextColor(Cores.cinza)
+            setPadding(dp(2), 0, 0, dp(10))
+        })
+        doLado.forEach { c ->
+            val rbg = redondo(Cores.janela, dpf(16)).apply { setStroke(dp(1), Cores.linha) }
+            val mini = ImageView(this).apply {
+                scaleType = if (ehVod) ImageView.ScaleType.CENTER_CROP else ImageView.ScaleType.FIT_CENTER
+                background = redondo(Cores.campo, dpf(10))
+                setPadding(dp(6), dp(4), dp(6), dp(4))
+                clipToOutline = true
+            }
+            val nm = TextView(this).apply {
+                text = c.nome
+                textSize = 15f
+                setTextColor(Cores.tinta)
+                typeface = Typeface.DEFAULT_BOLD
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+            }
+            val gr = TextView(this).apply {
+                text = c.grupo
+                textSize = 12f
+                setTextColor(Cores.cinza)
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+            }
+            val txt = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(12), 0, 0, 0)
+                addView(nm)
+                addView(gr)
+            }
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = rbg
+                setPadding(dp(10), dp(10), dp(12), dp(10))
+                isFocusable = true
+                isClickable = true
+                addView(mini, LinearLayout.LayoutParams(dp(64), dp(44)))
+                addView(txt, LinearLayout.LayoutParams(0, -2, 1f))
+                setOnClickListener { abrir(lista, lista.indexOf(c)) }
+                setOnFocusChangeListener { v, has ->
+                    rbg.setStroke(if (has) dp(3) else dp(1), if (has) Cores.tinta else Cores.linha)
+                    v.animate().scaleX(if (has) 1.03f else 1f).scaleY(if (has) 1.03f else 1f).setDuration(120).start()
+                }
+            }
+            c.logo?.let { u -> Iptv.logo(u) { b -> if (b != null) mini.setImageBitmap(b) } }
+            lado.addView(row, LinearLayout.LayoutParams(-1, 0, 1f).apply { bottomMargin = dp(10) })
+        }
+        linha.addView(lado, LinearLayout.LayoutParams(0, -1, 1.1f))
         return linha
     }
 
     private fun cartao(c: Iptv.Canal, lista: List<Iptv.Canal>, i: Int, fav: Boolean): View {
-        val bg = redondo(Cores.janela, dpf(18))
+        val bg = redondo(Cores.janela, dpf(18)).apply { setStroke(dp(1), Cores.linha) }
         val anel = GradientDrawable().apply {
             cornerRadius = dpf(18)
             setColor(Color.TRANSPARENT)
@@ -776,6 +863,18 @@ class IptvActivity : Activity() {
         val topo = FrameLayout(this)
         topo.addView(letra, FrameLayout.LayoutParams(-1, -1))
         topo.addView(img, FrameLayout.LayoutParams(-1, -1))
+        // Número do canal no canto (TV ao vivo)
+        if (!ehVod) {
+            topo.addView(
+                TextView(this).apply {
+                    text = "%02d".format(i + 1)
+                    textSize = 11f
+                    setTextColor(Cores.cinza)
+                    setPadding(0, dp(8), dp(10), 0)
+                },
+                FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END),
+            )
+        }
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = bg
@@ -787,9 +886,10 @@ class IptvActivity : Activity() {
             addView(nome)
             setOnClickListener { abrir(lista, i) }
             setOnFocusChangeListener { v, has ->
-                anel.setStroke(if (has) dp(4) else 0, Cores.tinta)
+                anel.setStroke(if (has) dp(3) else 0, Cores.tinta)
                 v.animate().scaleX(if (has) 1.06f else 1f).scaleY(if (has) 1.06f else 1f)
-                    .translationZ(if (has) dpf(8) else 0f).setDuration(140).start()
+                    .translationY(if (has) -dpf(8) else 0f)
+                    .translationZ(if (has) dpf(14) else 0f).setDuration(180).start()
             }
         }
         c.logo?.let { u ->

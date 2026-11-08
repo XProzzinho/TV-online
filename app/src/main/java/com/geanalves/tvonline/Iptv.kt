@@ -91,7 +91,10 @@ object Iptv {
 
 /** Uma lista M3U (TV ao vivo ou filmes e séries), com favoritos e abas próprias. */
 class ListaM3u(private val chave: String, val vod: Boolean, private val fixo: String? = null) {
-    /** Lista que já vem pronta no app (Pluto TV). */
+    /** Nome curto desta lista (para guardar histórico, ordem etc.). */
+    val id get() = chave
+
+        /** Lista que já vem pronta no app (Pluto TV). */
     val ehPluto get() = fixo != null
 
     // Baixa a lista de novo a cada 12 horas (Pluto TV: a cada 6, os links dela mudam mais)

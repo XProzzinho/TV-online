@@ -71,6 +71,16 @@ class PlayerActivity : Activity() {
     private val h = Handler(Looper.getMainLooper())
     private val esconder = Runnable { faixa.animate().alpha(0f).setDuration(300).start() }
     private val irParaNumero = Runnable { pularParaNumero() }
+
+    /** Guarda onde parou no filme/episódio a cada 15 segundos. */
+    private val guardar = object : Runnable {
+        override fun run() {
+            guardarPosicao()
+            h.postDelayed(this, 15_000)
+        }
+    }
+    private var retomar = 0L
+    private var velocidade = 1f
     private val desligar = Runnable {
         Toast.makeText(this, "Timer: desligando o Lumi TV", Toast.LENGTH_LONG).show()
         finish()
@@ -116,6 +126,7 @@ class PlayerActivity : Activity() {
                     h.postDelayed({ if (!isFinishing) tocar(manterTentativa = true) }, 1500)
                     return
                 }
+                if (!vod) Historico.marcarQuebrado(this@PlayerActivity, lista[indice].url)
                 aviso.text = if (vod) "Não consegui abrir este título agora." else "Este canal está fora do ar agora.\nUse cima/baixo para trocar."
                 aviso.visibility = View.VISIBLE
             }
@@ -124,6 +135,27 @@ class PlayerActivity : Activity() {
                 if (state == Player.STATE_READY) {
                     aviso.visibility = View.GONE
                     tentou = false
+                    val c = lista[indice]
+                    if (!vod) {
+                        Historico.funcionou(this@PlayerActivity, c.url)
+                    }
+                    // Continuar assistindo: volta para onde parou
+                    if (vod && retomar > 0) {
+                        val pos = retomar
+                        retomar = 0
+                        player.seekTo(pos)
+                        Toast.makeText(this@PlayerActivity, "Continuando de onde você parou", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                if (state == Player.STATE_ENDED && vod) {
+                    guardarPosicao(terminou = true)
+                    // Série: próximo episódio sozinho
+                    if (indice < lista.size - 1) {
+                        Toast.makeText(this@PlayerActivity, "Próximo episódio", Toast.LENGTH_SHORT).show()
+                        trocar(1)
+                    } else {
+                        finish()
+                    }
                 }
             }
         })
@@ -222,14 +254,24 @@ class PlayerActivity : Activity() {
         if (!manterTentativa) tentou = false
         val c = lista[indice]
         Iptv.atual.salvarUltimo(this, c)
+        if (!manterTentativa) Historico.assistiu(this, Iptv.atual.id, c)
+        retomar = if (vod) Historico.posicao(this, c.url) else 0L
         aviso.visibility = View.GONE
         val item = MediaItem.Builder().setUri(Uri.parse(c.url)).apply {
             if (c.url.contains(".m3u8", ignoreCase = true)) setMimeType(MimeTypes.APPLICATION_M3U8)
         }.build()
         player.setMediaItem(item)
         player.prepare()
+        player.setPlaybackSpeed(velocidade)
         player.playWhenReady = true
         mostrarFaixa()
+    }
+
+    private fun guardarPosicao(terminou: Boolean = false) {
+        if (!vod || !::player.isInitialized) return
+        val dur = player.duration
+        if (dur <= 0) return
+        Historico.guardarPosicao(this, lista[indice], if (terminou) dur else player.currentPosition, dur)
     }
 
     private fun mostrarFaixa() {
@@ -289,6 +331,7 @@ class PlayerActivity : Activity() {
             mostrarFaixa()
             return
         }
+        guardarPosicao()
         anterior = indice
         indice = i
         tocar()
@@ -365,13 +408,26 @@ class PlayerActivity : Activity() {
 
     private fun menu() {
         val itens = mutableListOf("Áudio", "Legenda", "Tela", "Desligar em… (timer)")
+        if (vod) itens += "Velocidade (${fmtVel(velocidade)})"
         escolher("Opções", itens, -1) { i ->
             when (i) {
                 0 -> menuFaixa(C.TRACK_TYPE_AUDIO)
                 1 -> menuFaixa(C.TRACK_TYPE_TEXT)
                 2 -> menuTela()
                 3 -> menuTimer()
+                4 -> menuVelocidade()
             }
+        }
+    }
+
+    private fun fmtVel(v: Float) = (if (v % 1f == 0f) v.toInt().toString() else v.toString().replace('.', ',')) + "x"
+
+    private fun menuVelocidade() {
+        val vs = listOf(0.75f, 1f, 1.25f, 1.5f, 2f)
+        escolher("Velocidade", vs.map { fmtVel(it) + if (it == 1f) " (normal)" else "" }, vs.indexOf(velocidade)) { i ->
+            velocidade = vs[i]
+            player.setPlaybackSpeed(velocidade)
+            mostrarFaixa()
         }
     }
 
@@ -528,12 +584,15 @@ class PlayerActivity : Activity() {
 
     override fun onStop() {
         super.onStop()
+        guardarPosicao()
+        h.removeCallbacks(guardar)
         if (::player.isInitialized) player.pause()
     }
 
     override fun onStart() {
         super.onStart()
         if (::player.isInitialized) player.play()
+        if (vod) h.postDelayed(guardar, 15_000)
     }
 
     override fun onDestroy() {

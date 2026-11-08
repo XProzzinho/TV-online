@@ -435,7 +435,70 @@ class IptvActivity : Activity() {
             ult.text = textoUltimo()
         }
         box.addView(ult, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(14) })
-        d.setContentView(box)
+
+        // Canais que não abrem: ficam escondidos por 24 horas
+        fun textoQuebrados() = "Esconder canais que não abrem: " +
+            if (Historico.esconderQuebrados(this)) "LIGADO (${Historico.quebrados(this).size} escondidos)" else "desligado"
+        val qb = botao(textoQuebrados()) {}
+        qb.setOnClickListener {
+            val agora = !Historico.esconderQuebrados(this)
+            Historico.mudarEsconderQuebrados(this, agora)
+            if (!agora) Historico.limparQuebrados(this)
+            qb.text = textoQuebrados()
+        }
+        box.addView(qb, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10) })
+
+        // Várias listas: guardar a de TV ao vivo e trocar entre elas
+        box.addView(TextView(this).apply {
+            text = "Listas guardadas (TV ao vivo)"
+            textSize = 15f
+            setTextColor(Cores.tinta)
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(dp(4), dp(18), 0, dp(6))
+        })
+        val guardadas = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            clipChildren = false
+        }
+        val hsg = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            clipChildren = false
+            clipToPadding = false
+            setPadding(0, dp(4), 0, dp(4))
+            addView(guardadas)
+        }
+        fun montarGuardadas() {
+            guardadas.removeAllViews()
+            guardadas.addView(botao("＋ Guardar esta") {
+                val u = aoVivo.text.toString().trim()
+                if (!u.startsWith("http")) {
+                    Toast.makeText(this, "Coloque um link no campo TV ao vivo", Toast.LENGTH_SHORT).show()
+                    return@botao
+                }
+                val nome = try { Uri.parse(u).host?.removePrefix("www.") } catch (_: Throwable) { null } ?: "Lista"
+                Historico.guardarLista(this, if (u.contains("minha.m3u")) "Minha lista grátis" else nome, u)
+                montarGuardadas()
+            }, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(10) })
+            Historico.listasGuardadas(this).forEach { (nome, u) ->
+                val b = botao(nome) { aoVivo.setText(u) }
+                b.setOnLongClickListener {
+                    Historico.apagarLista(this, u)
+                    Toast.makeText(this, "Lista \"$nome\" apagada", Toast.LENGTH_SHORT).show()
+                    montarGuardadas()
+                    true
+                }
+                guardadas.addView(b, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(10) })
+            }
+        }
+        montarGuardadas()
+        box.addView(hsg, LinearLayout.LayoutParams(dp(640), -2))
+        box.addView(TextView(this).apply {
+            text = "OK numa lista guardada põe o link no campo (depois aperte Salvar). Segure OK para apagar."
+            textSize = 13f
+            setTextColor(Cores.cinza)
+            setPadding(dp(4), dp(6), 0, 0)
+        })
+        d.setContentView(ScrollView(this).apply { addView(box) })
         d.show()
         aoVivo.requestFocus()
     }
@@ -578,7 +641,8 @@ class IptvActivity : Activity() {
         conteudo.removeAllViews()
         val nomeAba = Iptv.atual.abas[abaAtual]
         titulo.text = nomeAba
-        val brutos = Iptv.atual.daAba(this, abaAtual)
+        val escondidos = Historico.quebrados(this)
+        val brutos = Iptv.atual.daAba(this, abaAtual).let { l -> if (escondidos.isEmpty()) l else l.filter { it.url !in escondidos } }
         // Séries: cada série aparece uma vez (o cartão toca os episódios dela)
         episodios = if (ehVod && abaAtual == 1) brutos.groupBy { Iptv.nomeSerie(it.nome) } else emptyMap()
         val daAba = if (episodios.isNotEmpty()) {
@@ -607,6 +671,17 @@ class IptvActivity : Activity() {
             conteudo.addView(linhaDestaque(daAba), LinearLayout.LayoutParams(-1, dp(270)).apply { bottomMargin = dp(26) })
         }
 
+        // 1b) Continuar assistindo (filmes) ou Vistos por último (canais)
+        if (abaAtual == 0) {
+            val porUrl = Iptv.atual.canais.associateBy { it.url }
+            val itens = if (ehVod) {
+                Historico.continuar(this).filter { it.url in porUrl }.map { porUrl[it.url]!! }
+            } else {
+                Historico.ultimos(this, Iptv.atual.id).mapNotNull { porUrl[it] }.filter { it.url !in escondidos }
+            }
+            if (itens.isNotEmpty()) linhaMini(if (ehVod) "Continuar assistindo" else "Vistos por último", itens.take(12))
+        }
+
         // 2) Os grupos da lista dentro desta aba, em blocos (como Gênero, Nacional, No ar)
         val grupos = daAba.map { it.grupo }.distinct()
         if (grupos.size > 1) {
@@ -630,9 +705,15 @@ class IptvActivity : Activity() {
         }
 
         // 3) Grade com os canais (do grupo escolhido ou todos da aba)
-        val lista = if (subgrupo == null) daAba else daAba.filter { it.grupo == subgrupo }
+        val doGrupo = if (subgrupo == null) daAba else daAba.filter { it.grupo == subgrupo }
+        val ordem = Historico.ordem(this, Iptv.atual.id)
+        val lista = when (ordem) {
+            1 -> doGrupo.sortedBy { Iptv.semAcento(it.nome) }
+            2 -> Historico.vezes(this, Iptv.atual.id).let { v -> doGrupo.sortedByDescending { v[it.url] ?: 0 } }
+            else -> doGrupo
+        }
         Iptv.fila = lista
-        conteudo.addView(secao((subgrupo ?: "Todos os canais") + " · ${lista.size}"))
+        conteudo.addView(cabecalhoGrade((subgrupo ?: if (ehVod) "Todos" else "Todos os canais") + " · ${lista.size}", ordem))
         gradeFavs = Iptv.atual.favoritos(this)
         gradeLarg = (resources.displayMetrics.widthPixels - dp(112) - dp(16) * (colunas - 1)) / colunas
         gradeLista = lista
@@ -893,6 +974,66 @@ class IptvActivity : Activity() {
         return linha
     }
 
+    /** Título da grade com o botão de ordem (lista, A a Z, mais vistos). */
+    private fun cabecalhoGrade(texto: String, ordem: Int): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            clipChildren = false
+        }
+        row.addView(secao(texto))
+        val nomes = listOf("Ordem da lista", "A a Z", "Mais vistos")
+        val bg = redondo(Cores.janela, dpf(18)).apply { setStroke(dp(1), Cores.linha) }
+        row.addView(
+            TextView(this).apply {
+                text = "⇅  " + nomes[ordem]
+                textSize = 14f
+                setTextColor(Cores.tinta)
+                background = bg
+                setPadding(dp(14), dp(6), dp(16), dp(6))
+                isFocusable = true
+                isClickable = true
+                setOnClickListener {
+                    Historico.mudarOrdem(this@IptvActivity, Iptv.atual.id, (ordem + 1) % nomes.size)
+                    mostrar()
+                }
+                setOnFocusChangeListener { _, has ->
+                    bg.setColor(if (has) Cores.tinta else Cores.janela)
+                    setTextColor(if (has) Cores.papel else Cores.tinta)
+                }
+            },
+            LinearLayout.LayoutParams(-2, -2).apply {
+                leftMargin = dp(16)
+                bottomMargin = dp(8)
+            },
+        )
+        return row
+    }
+
+    /** Fileira deslizante de cartões (Continuar assistindo / Vistos por último). */
+    private fun linhaMini(titulo: String, itens: List<Iptv.Canal>) {
+        conteudo.addView(secao(titulo))
+        val hs = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            clipChildren = false
+            clipToPadding = false
+            setPadding(dp(4), dp(10), dp(4), dp(14))
+        }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            clipChildren = false
+            clipToPadding = false
+        }
+        hs.addView(row)
+        val favs = Iptv.atual.favoritos(this)
+        val larg = (resources.displayMetrics.widthPixels - dp(112) - dp(16) * (colunas - 1)) / colunas
+        val alt = (larg * (if (ehVod) 1.5f else if (Guia.pronto) 0.92f else 0.72f)).toInt()
+        itens.forEachIndexed { i, c ->
+            row.addView(cartao(c, itens, i, c.url in favs), LinearLayout.LayoutParams(larg, alt).apply { rightMargin = dp(16) })
+        }
+        conteudo.addView(hs, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+    }
+
     /** Barrinha fina: cinza no fundo e vermelha até onde o programa já passou. */
     private fun barraProgresso(p: Float): View {
         val fundo = FrameLayout(this).apply { background = redondo(Cores.campo, dpf(2)) }
@@ -959,6 +1100,7 @@ class IptvActivity : Activity() {
                 setPadding(dp(8), 0, dp(8), dp(6))
             }
         }
+        val visto = if (ehVod) Historico.fracao(this, c.url) else -1f
         val barra = agora?.let { p -> barraProgresso(p.progresso()) }
         val topo = FrameLayout(this)
         topo.addView(letra, FrameLayout.LayoutParams(-1, -1))
@@ -991,6 +1133,13 @@ class IptvActivity : Activity() {
                     leftMargin = dp(14)
                     rightMargin = dp(14)
                     bottomMargin = dp(10)
+                })
+            }
+            if (visto >= 0f) {
+                addView(barraProgresso(visto), LinearLayout.LayoutParams(-1, dp(4)).apply {
+                    leftMargin = dp(12)
+                    rightMargin = dp(12)
+                    bottomMargin = dp(8)
                 })
             }
             setOnClickListener { abrir(lista, i) }

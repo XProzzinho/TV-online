@@ -22,6 +22,16 @@ object Iptv {
     val aoVivo = ListaM3u("iptv", vod = false)
     val vod = ListaM3u("vod", vod = true)
 
+    /** Pluto TV: canais grátis e oficiais, lista do Brasil já pronta (não precisa colocar link). */
+    val pluto = ListaM3u(
+        "pluto",
+        vod = false,
+        fixo = "https://raw.githubusercontent.com/BuddyChewChew/pluto/main/pluto_br.m3u",
+    )
+
+    /** As três telas do topo, na ordem: TV ao vivo, Filmes e Séries, Pluto TV. */
+    val listas = listOf(aoVivo, vod, pluto)
+
     /** A lista que a tela aberta está mostrando. */
     var atual: ListaM3u = aoVivo
 
@@ -79,8 +89,12 @@ object Iptv {
 }
 
 /** Uma lista M3U (TV ao vivo ou filmes e séries), com favoritos e abas próprias. */
-class ListaM3u(private val chave: String, val vod: Boolean) {
-    private val VALIDADE = 12L * 60 * 60 * 1000 // baixa a lista de novo a cada 12 horas
+class ListaM3u(private val chave: String, val vod: Boolean, private val fixo: String? = null) {
+    /** Lista que já vem pronta no app (Pluto TV). */
+    val ehPluto get() = fixo != null
+
+    // Baixa a lista de novo a cada 12 horas (Pluto TV: a cada 6, os links dela mudam mais)
+    private val VALIDADE = (if (fixo != null) 6L else 12L) * 60 * 60 * 1000
     private val pool get() = Iptv.pool
     private val main get() = Iptv.main
 
@@ -90,7 +104,7 @@ class ListaM3u(private val chave: String, val vod: Boolean) {
     private fun sp(ctx: Context) = ctx.getSharedPreferences("inicio", Context.MODE_PRIVATE)
     private fun cache(ctx: Context) = File(ctx.filesDir, "lista_$chave.m3u")
 
-    fun link(ctx: Context): String? = sp(ctx).getString("${chave}_url", null)
+    fun link(ctx: Context): String? = fixo ?: sp(ctx).getString("${chave}_url", null)
 
     fun salvarLink(ctx: Context, url: String) {
         val e = sp(ctx).edit()
@@ -118,9 +132,11 @@ class ListaM3u(private val chave: String, val vod: Boolean) {
     // ---------- abas ----------
 
     /** TV ao vivo: só canais. Filmes e Séries: só filmes e séries. */
-    val abas: List<String> =
-        if (vod) listOf("Filmes", "Séries", "Kids", "Anime", "Tudo")
-        else listOf("Destaques", "Jogos", "Notícias", "Kids", "Explorar")
+    val abas: List<String> = when {
+        fixo != null -> listOf("Destaques", "Filmes", "Séries", "Kids", "Anime", "Explorar")
+        vod -> listOf("Filmes", "Séries", "Kids", "Anime", "Tudo")
+        else -> listOf("Destaques", "Jogos", "Notícias", "Kids", "Explorar")
+    }
 
     private val chavesAoVivo = mapOf(
         1 to listOf("esporte", "sport", "futebol", "football", "soccer", "premiere", "combate", "ufc", "luta", "nba", "espn", "jogos"),
@@ -132,6 +148,14 @@ class ListaM3u(private val chave: String, val vod: Boolean) {
         1 to listOf("serie", "series", "novela", "seriado", "temporada"),
         2 to listOf("kid", "infantil", "crianca", "desenho", "animacao", "animation", "disney", "pixar"),
         3 to listOf("anime", "crunchyroll", "otaku"),
+    )
+
+    /** Grupos da lista da Pluto TV do Brasil em cada aba. */
+    private val chavesPluto = mapOf(
+        1 to listOf("filme", "cine"),
+        2 to listOf("serie", "novela", "comedia", "south park", "jornada", "retro", "reality", "investigacao", "misterio"),
+        3 to listOf("infantil", "nickelodeon", "kid", "desenho"),
+        4 to listOf("anime"),
     )
 
     private fun eFilme(c: Iptv.Canal) = c.url.contains("/movie/")
@@ -146,7 +170,7 @@ class ListaM3u(private val chave: String, val vod: Boolean) {
             val f = favoritos(ctx)
             return (canais.filter { it.url in f } + canais.filter { it.url !in f }.take(40)).distinct()
         }
-        val ks = (if (vod) chavesVod else chavesAoVivo)[aba].orEmpty()
+        val ks = (if (fixo != null) chavesPluto else if (vod) chavesVod else chavesAoVivo)[aba].orEmpty()
         return canais.filter { c ->
             val g = Iptv.semAcento(c.grupo)
             ks.any { g.contains(it) } ||

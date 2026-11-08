@@ -52,13 +52,18 @@ class IptvActivity : Activity() {
     private val abas = ArrayList<TextView>()
     private var abaAtual = 0 // TV ao vivo começa em Destaques; Filmes e Séries em Filmes
     private val ehVod get() = Iptv.atual.vod
-    private val nomeTela get() = if (ehVod) "Filmes e Séries" else "TV ao vivo"
+    private val nomeTela get() = when (modo) {
+        1 -> "Filmes e Séries"
+        2 -> "Pluto TV"
+        else -> "TV ao vivo"
+    }
     private var subgrupo: String? = null
     private val colunas = 5
     private val h = Handler(Looper.getMainLooper())
     private var girar: Runnable? = null
     private var episodios: Map<String, List<Iptv.Canal>> = emptyMap()
-    private var modoVod = false
+    /** 0 = TV ao vivo, 1 = Filmes e Séries, 2 = Pluto TV. */
+    private var modo = 0
     private lateinit var relogio: TextView
     private val horaFmt = java.text.SimpleDateFormat("HH:mm", java.util.Locale("pt", "BR"))
     private val tique = object : Runnable {
@@ -87,16 +92,20 @@ class IptvActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
                 Cores.atualizar()
-        Iptv.atual = if (intent.getStringExtra("modo") == "vod") Iptv.vod else Iptv.aoVivo
+        modo = when (intent.getStringExtra("modo")) {
+            "vod" -> 1
+            "pluto" -> 2
+            else -> 0
+        }
+        Iptv.atual = Iptv.listas[modo]
         abaAtual = intent.getIntExtra("aba", 0).coerceIn(0, Iptv.atual.abas.size - 1)
-        modoVod = Iptv.atual.vod
         setContentView(montar())
         carregar(false)
     }
 
     override fun onResume() {
         super.onResume()
-        Iptv.atual = if (modoVod) Iptv.vod else Iptv.aoVivo
+        Iptv.atual = Iptv.listas[modo]
         Atualizacao.conferir(this) { v -> if (!isFinishing) avisarAtualizacao(v) }
         // Volta do player: atualiza os favoritos
         if (Iptv.atual.canais.isNotEmpty()) mostrar()
@@ -178,7 +187,7 @@ class IptvActivity : Activity() {
             background = redondo(Cores.janela, dpf(26)).apply { setStroke(dp(1), Cores.linha) }
             setPadding(dp(5), dp(5), dp(5), dp(5))
         }
-        listOf("● TV ao vivo" to false, "Filmes e Séries" to true).forEach { (nome, vod) ->
+        listOf("● TV ao vivo", "Filmes e Séries", "Pluto TV").forEachIndexed { m, nome ->
             val bg = redondo(Color.TRANSPARENT, dpf(20))
             val b = TextView(this).apply {
                 text = nome
@@ -187,8 +196,8 @@ class IptvActivity : Activity() {
                 background = bg
                 isFocusable = true
                 isClickable = true
-                tag = vod
-                setOnClickListener { trocarModo(vod) }
+                tag = m
+                setOnClickListener { trocarModo(m) }
                 setOnFocusChangeListener { _, _ -> pintarModo() }
             }
             botoesModo += b
@@ -276,11 +285,11 @@ class IptvActivity : Activity() {
         pintarAbas()
     }
 
-    /** Troca entre TV ao vivo e Filmes e Séries. */
-    private fun trocarModo(vod: Boolean) {
-        if (vod == modoVod) return
-        modoVod = vod
-        Iptv.atual = if (vod) Iptv.vod else Iptv.aoVivo
+    /** Troca entre TV ao vivo, Filmes e Séries e Pluto TV. */
+    private fun trocarModo(m: Int) {
+        if (m == modo) return
+        modo = m
+        Iptv.atual = Iptv.listas[m]
         abaAtual = 0
         subgrupo = null
         montarAbas()
@@ -291,7 +300,7 @@ class IptvActivity : Activity() {
     private fun pintarModo() {
         for (b in botoesModo) {
             val bg = b.background as GradientDrawable
-            val meu = b.tag == modoVod
+            val meu = b.tag == modo
             bg.setColor(if (meu) Cores.tinta else Color.TRANSPARENT)
             bg.setStroke(if (b.isFocused) dp(2) else 0, if (meu) Cores.vivo else Cores.tinta)
             b.setTextColor(if (meu) Cores.papel else if (b.isFocused) Cores.tinta else Cores.cinza)
@@ -933,9 +942,14 @@ class PlayerActivity : Activity() {
             return
         }
 
+        // Pluto TV toca melhor (e em HD) quando acha que é um navegador
+        val ehPluto = lista.any { it.url.contains("pluto.tv") }
         val fonte = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
-            .setUserAgent("InicioTV")
+            .setUserAgent(
+                if (ehPluto) "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+                else "InicioTV",
+            )
             .setConnectTimeoutMs(15000)
             .setReadTimeoutMs(20000)
         player = ExoPlayer.Builder(this)

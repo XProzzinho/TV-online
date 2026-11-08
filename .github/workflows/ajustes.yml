@@ -1,0 +1,78 @@
+name: Ajustes do app
+
+# Disparado pelo Controle TV (Administração › Meus apps):
+# troca o nome do app e/ou o ícone, salva e gera o APK novo.
+on:
+  workflow_dispatch:
+    inputs:
+      nome:
+        description: Nome novo do app (vazio = não muda)
+        required: false
+        default: ""
+      icone:
+        description: '"sim" para usar a imagem ajustes/icone.png como ícone'
+        required: false
+        default: "nao"
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  ajustar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trocar o nome
+        if: ${{ inputs.nome != '' }}
+        env:
+          NOME: ${{ inputs.nome }}
+        run: |
+          python3 - <<'EOF'
+          import os, re, html
+          p = "app/src/main/res/values/strings.xml"
+          s = open(p, encoding="utf-8").read()
+          nome = html.escape(os.environ["NOME"].strip()[:30]).replace("'", "\\'")
+          s = re.sub(r'(<string name="app_name">)[^<]*(</string>)', lambda m: m.group(1) + nome + m.group(2), s, count=1)
+          open(p, "w", encoding="utf-8").write(s)
+          EOF
+
+      - name: Trocar o ícone
+        if: ${{ inputs.icone == 'sim' && hashFiles('ajustes/icone.png') != '' }}
+        run: |
+          which convert || (sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick)
+          mkdir -p app/src/main/res/drawable-nodpi
+          # Ícone quadrado
+          convert ajustes/icone.png -resize 432x432^ -gravity center -extent 432x432 app/src/main/res/drawable-nodpi/meu_icone.png
+          # Banner da TV (320x180): fundo escuro com o ícone no meio
+          convert -size 320x180 xc:'#101014' \( ajustes/icone.png -resize 150x150^ -gravity center -extent 150x150 \) -gravity center -composite app/src/main/res/drawable-nodpi/meu_banner.png
+          python3 - <<'EOF'
+          import re
+          p = "app/src/main/AndroidManifest.xml"
+          s = open(p, encoding="utf-8").read()
+          ini = s.index("<application")
+          fim = s.index(">", ini)
+          tag = s[ini:fim]
+          tag = re.sub(r'android:icon="[^"]*"', 'android:icon="@drawable/meu_icone"', tag)
+          tag = re.sub(r'android:roundIcon="[^"]*"', 'android:roundIcon="@drawable/meu_icone"', tag)
+          if 'android:banner=' in tag:
+              tag = re.sub(r'android:banner="[^"]*"', 'android:banner="@drawable/meu_banner"', tag)
+          s = s[:ini] + tag + s[fim:]
+          open(p, "w", encoding="utf-8").write(s)
+          EOF
+
+      - name: Salvar e gerar o APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "Controle TV"
+          git config user.email "geansdp2@gmail.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Nada mudou"
+            exit 0
+          fi
+          git commit -m "Ajustes pelo Controle TV"
+          git push
+          gh workflow run build.yml --ref main

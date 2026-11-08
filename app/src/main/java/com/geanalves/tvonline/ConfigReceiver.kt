@@ -11,6 +11,7 @@ import android.widget.Toast
  * Links das listas mandados pelo Controle TV (celular):
  *   --es iptv "LINK"  lista de TV ao vivo ("" apaga)
  *   --es vod  "LINK"  lista de filmes e séries ("" apaga)
+ *   --es pluto "LINK" lista da Pluto TV ("" volta para a lista padrão do Brasil)
  */
 class ConfigReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, intent: Intent) {
@@ -24,6 +25,11 @@ class ConfigReceiver : BroadcastReceiver() {
         intent.getStringExtra("vod")?.let { link ->
             Iptv.vod.salvarLink(app, link)
             aviso(if (link.isBlank()) "Lista de filmes e séries removida" else "Lista de filmes e séries salva")
+            resultData = "ok"
+        }
+        intent.getStringExtra("pluto")?.let { link ->
+            Iptv.pluto.salvarLink(app, link)
+            aviso(if (link.isBlank()) "Pluto TV: voltou para a lista padrão" else "Lista da Pluto TV trocada")
             resultData = "ok"
         }
     }

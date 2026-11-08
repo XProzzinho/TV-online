@@ -104,7 +104,8 @@ class ListaM3u(private val chave: String, val vod: Boolean, private val fixo: St
     private fun sp(ctx: Context) = ctx.getSharedPreferences("inicio", Context.MODE_PRIVATE)
     private fun cache(ctx: Context) = File(ctx.filesDir, "lista_$chave.m3u")
 
-    fun link(ctx: Context): String? = fixo ?: sp(ctx).getString("${chave}_url", null)
+    /** Link salvo (mandado pelo Controle TV); a Pluto TV volta para a lista padrão se não tiver. */
+    fun link(ctx: Context): String? = sp(ctx).getString("${chave}_url", null) ?: fixo
 
     fun salvarLink(ctx: Context, url: String) {
         val e = sp(ctx).edit()

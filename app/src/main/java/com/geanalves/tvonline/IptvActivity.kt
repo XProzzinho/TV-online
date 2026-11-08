@@ -46,6 +46,10 @@ private fun redondo(cor: Int, raio: Float) = GradientDrawable().apply {
  */
 class IptvActivity : Activity() {
 
+    private companion object {
+        const val VOZ = 77
+    }
+
     private lateinit var conteudo: LinearLayout
     private lateinit var info: TextView
     private lateinit var titulo: TextView
@@ -86,6 +90,15 @@ class IptvActivity : Activity() {
     /** Para abrir no último canal só uma vez, quando o app abre. */
     private var jaAbriuUltimo = false
 
+    /** Texto buscado (null = sem busca). */
+    private var busca: String? = null
+
+    /** Prévia ao vivo: um player pequeno e mudo dentro do cartão parado. */
+    private var previa: ExoPlayer? = null
+    private var previaView: PlayerView? = null
+    private var previaAgendada: Runnable? = null
+    private fun previaLigada() = getSharedPreferences("inicio", MODE_PRIVATE).getBoolean("previa", true)
+
     /** O que o player vai tocar: os episódios da série ou a lista da tela. */
     private fun abrir(lista: List<Iptv.Canal>, i: Int) {
         val c = lista[i]
@@ -112,6 +125,9 @@ class IptvActivity : Activity() {
         abaAtual = intent.getIntExtra("aba", 0).coerceIn(0, Iptv.atual.abas.size - 1)
         setContentView(montar())
         jaAbriuUltimo = savedInstanceState != null
+        busca = intent.getStringExtra("busca")?.takeIf { it.isNotBlank() }
+        if (busca != null) jaAbriuUltimo = true
+        Iptv.aoMudar = { if (!isFinishing && Iptv.atual.canais.isNotEmpty()) mostrar() }
         carregar(false)
         // Guia de programação: quando chegar, mostra "Agora" nos cartões
         Guia.carregar(this) { if (!isFinishing && !ehVod && Iptv.atual.canais.isNotEmpty()) mostrar() }
@@ -142,6 +158,303 @@ class IptvActivity : Activity() {
     override fun onPause() {
         super.onPause()
         girar?.let { h.removeCallbacks(it) }
+        pararPrevia()
+    }
+
+    override fun onDestroy() {
+        previa?.release()
+        previa = null
+        if (Iptv.aoMudar != null) Iptv.aoMudar = null
+        super.onDestroy()
+    }
+
+    /** Busca mandada pelo Controle TV com o app já aberto. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.getStringExtra("busca")?.takeIf { it.isNotBlank() }?.let { q ->
+            buscar(q)
+        }
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_SEARCH) {
+            abrirBusca()
+            return true
+        }
+        if (keyCode == KeyEvent.KEYCODE_BACK && busca != null) {
+            busca = null
+            mostrar()
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    // ---------- busca (digitando ou falando) ----------
+
+    private fun buscar(q: String) {
+        busca = q.trim().ifBlank { null }
+        subgrupo = null
+        if (Iptv.atual.canais.isNotEmpty()) mostrar() else carregar(false)
+    }
+
+    private fun abrirBusca() {
+        val d = android.app.Dialog(this)
+        d.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        d.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = redondo(Cores.janela, dpf(28))
+            setPadding(dp(32), dp(26), dp(32), dp(24))
+        }
+        box.addView(TextView(this).apply {
+            text = "Buscar em $nomeTela"
+            textSize = 24f
+            setTextColor(Cores.tinta)
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+            setPadding(0, 0, 0, dp(12))
+        })
+        val bgCampo = redondo(Cores.campo, dpf(16))
+        val campo = android.widget.EditText(this).apply {
+            hint = "Nome do canal, filme ou série"
+            setText(busca ?: "")
+            textSize = 18f
+            setTextColor(Cores.tinta)
+            setHintTextColor(Cores.cinza)
+            background = bgCampo
+            isSingleLine = true
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+            setPadding(dp(18), dp(12), dp(18), dp(12))
+            setOnFocusChangeListener { _, has -> bgCampo.setStroke(if (has) dp(3) else 0, Cores.tinta) }
+            setOnEditorActionListener { v, _, _ ->
+                d.dismiss()
+                buscar(v.text.toString())
+                true
+            }
+        }
+        box.addView(campo, LinearLayout.LayoutParams(dp(560), -2))
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(18), 0, 0)
+        }
+        fun botao(t: String, escuro: Boolean, acao: () -> Unit) = TextView(this).apply {
+            text = t
+            textSize = 17f
+            val bg = redondo(if (escuro) Cores.tinta else Cores.campo, dpf(22))
+            background = bg
+            setTextColor(if (escuro) Cores.papel else Cores.tinta)
+            setPadding(dp(22), dp(10), dp(22), dp(10))
+            isFocusable = true
+            isClickable = true
+            setOnClickListener { acao() }
+            setOnFocusChangeListener { v, has ->
+                v.animate().scaleX(if (has) 1.06f else 1f).scaleY(if (has) 1.06f else 1f).setDuration(120).start()
+                bg.setStroke(if (has) dp(3) else 0, if (escuro) Cores.campo else Cores.tinta)
+            }
+        }
+        row.addView(botao("Buscar", true) {
+            d.dismiss()
+            buscar(campo.text.toString())
+        }, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(12) })
+        row.addView(botao("🎤  Falar", false) {
+            d.dismiss()
+            falar()
+        }, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(12) })
+        if (busca != null) {
+            row.addView(botao("Limpar busca", false) {
+                d.dismiss()
+                busca = null
+                mostrar()
+            })
+        }
+        box.addView(row)
+        d.setContentView(box)
+        d.show()
+        campo.requestFocus()
+    }
+
+    /** Busca por voz pelo microfone do controle. */
+    private fun falar() {
+        val i = Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "pt-BR")
+            putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, "Fale o nome do canal ou filme")
+        }
+        try {
+            startActivityForResult(i, VOZ)
+        } catch (_: Throwable) {
+            Toast.makeText(this, "Esta TV não tem busca por voz. Use o teclado ou o Controle TV.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == VOZ && resultCode == RESULT_OK) {
+            data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.let { buscar(it) }
+        }
+    }
+
+    private fun mostrarBusca(q: String) {
+        val alvo = Iptv.semAcento(q)
+        val achados = Perfil.filtrar(this, Iptv.atual.canais).let { l ->
+            val esc = Historico.quebrados(this)
+            l.filter { it.url !in esc && (Iptv.semAcento(it.nome).contains(alvo) || Iptv.semAcento(it.grupo).contains(alvo)) }
+        }
+        // Séries: um cartão por série
+        episodios = if (ehVod) achados.filter { it.url.contains("/series/") }.groupBy { Iptv.nomeSerie(it.nome) }.filter { it.value.size > 1 } else emptyMap()
+        val itens = achados.filter { episodios[Iptv.nomeSerie(it.nome)] == null } +
+            episodios.map { (nome, eps) -> eps.first().copy(nome = nome) }
+        titulo.text = "Busca"
+        info.text = "$nomeTela · busca: \"$q\" · ${itens.size} resultados  ·  Voltar limpa a busca"
+        if (itens.isEmpty()) {
+            conteudo.addView(TextView(this).apply {
+                text = "Não achei nada com \"$q\" em $nomeTela."
+                textSize = 18f
+                setTextColor(Cores.cinza)
+            })
+            return
+        }
+        Iptv.fila = itens
+        conteudo.addView(secao("Resultados para \"$q\" · ${itens.size}"))
+        gradeFavs = Iptv.atual.favoritos(this)
+        gradeLarg = (resources.displayMetrics.widthPixels - dp(112) - dp(16) * (colunas - 1)) / colunas
+        gradeLista = itens
+        gradeFeitos = 0
+        gradeLinha = null
+        maisCartoes()
+    }
+
+    // ---------- prévia ao vivo ----------
+
+    private fun agendarPrevia(lugar: FrameLayout, c: Iptv.Canal) {
+        previaAgendada?.let { h.removeCallbacks(it) }
+        if (ehVod || !previaLigada()) return
+        val r = Runnable { mostrarPrevia(lugar, c) }
+        previaAgendada = r
+        h.postDelayed(r, 1500)
+    }
+
+    private fun mostrarPrevia(lugar: FrameLayout, c: Iptv.Canal) {
+        if (isFinishing || !lugar.isAttachedToWindow) return
+        val p = previa ?: ExoPlayer.Builder(this)
+            .setMediaSourceFactory(
+                DefaultMediaSourceFactory(this).setDataSourceFactory(
+                    DefaultHttpDataSource.Factory()
+                        .setAllowCrossProtocolRedirects(true)
+                        .setUserAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36")
+                        .setConnectTimeoutMs(8000)
+                        .setReadTimeoutMs(10000),
+                ),
+            )
+            .build().also {
+                it.volume = 0f
+                previa = it
+            }
+        val v = previaView ?: PlayerView(this).apply {
+            useController = false
+            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            setShutterBackgroundColor(Color.TRANSPARENT)
+            previaView = this
+        }
+        (v.parent as? android.view.ViewGroup)?.removeView(v)
+        v.player = p
+        v.alpha = 0f
+        lugar.addView(v, FrameLayout.LayoutParams(-1, -1))
+        p.setMediaItem(MediaItem.Builder().setUri(Uri.parse(c.url)).apply {
+            if (c.url.contains(".m3u8", ignoreCase = true)) setMimeType(MimeTypes.APPLICATION_M3U8)
+        }.build())
+        p.prepare()
+        p.playWhenReady = true
+        // Aparece devagar quando o vídeo começa
+        p.addListener(object : Player.Listener {
+            override fun onRenderedFirstFrame() {
+                v.animate().alpha(1f).setDuration(300).start()
+                p.removeListener(this)
+            }
+        })
+    }
+
+    private fun pararPrevia() {
+        previaAgendada?.let { h.removeCallbacks(it) }
+        previaAgendada = null
+        previa?.stop()
+        previaView?.let { v ->
+            v.player = null
+            (v.parent as? android.view.ViewGroup)?.removeView(v)
+        }
+    }
+
+    // ---------- informações do filme (TMDB) ----------
+
+    private fun mostrarInfo(c: Iptv.Canal, lista: List<Iptv.Canal>, i: Int) {
+        if (Perfil.tmdb(this) == null) {
+            Toast.makeText(this, "Mande a chave do TMDB pelo Controle TV para ver as informações", Toast.LENGTH_LONG).show()
+            return
+        }
+        Toast.makeText(this, "Procurando ${Iptv.nomeSerie(c.nome)}…", Toast.LENGTH_SHORT).show()
+        Perfil.info(this, c.nome) { inf ->
+            if (isFinishing) return@info
+            if (inf == null) {
+                Toast.makeText(this, "Não achei informações deste título", Toast.LENGTH_SHORT).show()
+                return@info
+            }
+            val d = android.app.Dialog(this)
+            d.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+            d.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+            val box = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                background = redondo(Cores.janela, dpf(28))
+                setPadding(dp(26), dp(26), dp(30), dp(26))
+            }
+            val cartaz = ImageView(this).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                background = redondo(Cores.campo, dpf(16))
+                clipToOutline = true
+            }
+            box.addView(cartaz, LinearLayout.LayoutParams(dp(200), dp(300)).apply { rightMargin = dp(26) })
+            (inf.cartaz ?: c.logo)?.let { u -> Iptv.logo(u, 400) { b -> if (b != null) cartaz.setImageBitmap(b) } }
+            val txt = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            txt.addView(TextView(this).apply {
+                text = inf.titulo
+                textSize = 28f
+                setTextColor(Cores.tinta)
+                typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+            })
+            txt.addView(TextView(this).apply {
+                text = listOf(inf.tipo, inf.ano, if (inf.nota > 0) "★ %.1f".format(inf.nota) else "").filter { it.isNotBlank() }.joinToString("  ·  ")
+                textSize = 16f
+                setTextColor(Cores.cinza)
+                setPadding(0, dp(6), 0, dp(12))
+            })
+            txt.addView(TextView(this).apply {
+                text = inf.sinopse.ifBlank { "Sem sinopse em português." }
+                textSize = 16f
+                setTextColor(Cores.tinta)
+                maxLines = 8
+                ellipsize = TextUtils.TruncateAt.END
+                setLineSpacing(0f, 1.15f)
+            })
+            val assistir = TextView(this).apply {
+                text = "▶  Assistir"
+                textSize = 17f
+                setTextColor(Cores.papel)
+                typeface = Typeface.DEFAULT_BOLD
+                background = redondo(Cores.tinta, dpf(22))
+                setPadding(dp(24), dp(10), dp(26), dp(10))
+                isFocusable = true
+                isClickable = true
+                setOnClickListener {
+                    d.dismiss()
+                    abrir(lista, i)
+                }
+            }
+            txt.addView(assistir, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(18) })
+            box.addView(txt, LinearLayout.LayoutParams(dp(560), -2))
+            d.setContentView(box)
+            d.show()
+            assistir.requestFocus()
+        }
     }
 
     private fun montar(): View {
@@ -233,6 +546,25 @@ class IptvActivity : Activity() {
         }
         tituloRow.addView(troca)
         tituloRow.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+        // Botão Buscar (também pela tecla de busca/microfone do controle)
+        val buscaBg = redondo(Cores.janela, dpf(26)).apply { setStroke(dp(1), Cores.linha) }
+        tituloRow.addView(
+            TextView(this).apply {
+                text = "⌕  Buscar"
+                textSize = 16f
+                setTextColor(Cores.tinta)
+                background = buscaBg
+                setPadding(dp(20), dp(12), dp(20), dp(12))
+                isFocusable = true
+                isClickable = true
+                setOnClickListener { abrirBusca() }
+                setOnFocusChangeListener { _, has ->
+                    buscaBg.setColor(if (has) Cores.tinta else Cores.janela)
+                    setTextColor(if (has) Cores.papel else Cores.tinta)
+                }
+            },
+            LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(12) },
+        )
         // Botão "Listas": colocar os links direto na TV
         val listasBg = redondo(Cores.janela, dpf(26)).apply { setStroke(dp(1), Cores.linha) }
         tituloRow.addView(
@@ -448,6 +780,35 @@ class IptvActivity : Activity() {
         }
         box.addView(qb, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10) })
 
+        // Prévia ao vivo nos cartões
+        fun textoPrevia() = "Prévia ao vivo no cartão: " + if (previaLigada()) "LIGADA" else "desligada"
+        val pv = botao(textoPrevia()) {}
+        pv.setOnClickListener {
+            getSharedPreferences("inicio", MODE_PRIVATE).edit().putBoolean("previa", !previaLigada()).apply()
+            pv.text = textoPrevia()
+        }
+        box.addView(pv, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10) })
+
+        // Canais adultos: só com PIN
+        fun textoAdulto() = "Canais adultos: " + if (Perfil.adultosLiberados) "LIBERADOS (até fechar o app)" else "bloqueados (PIN)"
+        val ad = botao(textoAdulto()) {}
+        ad.setOnClickListener {
+            if (Perfil.adultosLiberados) {
+                Perfil.adultosLiberados = false
+                ad.text = textoAdulto()
+                return@setOnClickListener
+            }
+            if (Perfil.infantil(this)) {
+                Toast.makeText(this, "Não dá no perfil infantil", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            pedirPin {
+                Perfil.adultosLiberados = true
+                ad.text = textoAdulto()
+            }
+        }
+        box.addView(ad, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10) })
+
         // Várias listas: guardar a de TV ao vivo e trocar entre elas
         box.addView(TextView(this).apply {
             text = "Listas guardadas (TV ao vivo)"
@@ -501,6 +862,78 @@ class IptvActivity : Activity() {
         d.setContentView(ScrollView(this).apply { addView(box) })
         d.show()
         aoVivo.requestFocus()
+    }
+
+    /** Pede o PIN de 4 números (na primeira vez, cria: digita duas vezes). */
+    private fun pedirPin(ok: () -> Unit) {
+        val salvo = Perfil.pin(this)
+        var primeiro: String? = null
+        val d = android.app.Dialog(this)
+        d.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        d.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            background = redondo(Cores.janela, dpf(28))
+            setPadding(dp(36), dp(26), dp(36), dp(26))
+        }
+        val tit = TextView(this).apply {
+            text = if (salvo == null) "Crie um PIN de 4 números" else "Digite o PIN"
+            textSize = 22f
+            setTextColor(Cores.tinta)
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+            setPadding(0, 0, 0, dp(14))
+        }
+        box.addView(tit)
+        val campo = android.widget.EditText(this).apply {
+            textSize = 30f
+            gravity = Gravity.CENTER
+            letterSpacing = 0.5f
+            setTextColor(Cores.tinta)
+            background = redondo(Cores.campo, dpf(16))
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            filters = arrayOf(android.text.InputFilter.LengthFilter(4))
+            setPadding(dp(18), dp(10), dp(18), dp(10))
+        }
+        box.addView(campo, LinearLayout.LayoutParams(dp(260), -2))
+        campo.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(e: android.text.Editable?) {
+                val t = e?.toString().orEmpty()
+                if (t.length < 4) return
+                when {
+                    salvo != null && t == salvo -> {
+                        d.dismiss()
+                        ok()
+                    }
+                    salvo != null -> {
+                        Toast.makeText(this@IptvActivity, "PIN errado", Toast.LENGTH_SHORT).show()
+                        campo.setText("")
+                    }
+                    primeiro == null -> {
+                        primeiro = t
+                        tit.text = "Digite o PIN de novo"
+                        campo.setText("")
+                    }
+                    primeiro == t -> {
+                        Perfil.criarPin(this@IptvActivity, t)
+                        Toast.makeText(this@IptvActivity, "PIN criado", Toast.LENGTH_SHORT).show()
+                        d.dismiss()
+                        ok()
+                    }
+                    else -> {
+                        Toast.makeText(this@IptvActivity, "Os PINs não batem, comece de novo", Toast.LENGTH_SHORT).show()
+                        primeiro = null
+                        tit.text = "Crie um PIN de 4 números"
+                        campo.setText("")
+                    }
+                }
+            }
+        })
+        d.setContentView(box)
+        d.show()
+        campo.requestFocus()
     }
 
     // ---------- versão nova ----------
@@ -638,11 +1071,16 @@ class IptvActivity : Activity() {
 
     private fun mostrar() {
         girar?.let { h.removeCallbacks(it) }
+        pararPrevia()
         conteudo.removeAllViews()
+        busca?.let {
+            mostrarBusca(it)
+            return
+        }
         val nomeAba = Iptv.atual.abas[abaAtual]
         titulo.text = nomeAba
         val escondidos = Historico.quebrados(this)
-        val brutos = Iptv.atual.daAba(this, abaAtual).let { l -> if (escondidos.isEmpty()) l else l.filter { it.url !in escondidos } }
+        val brutos = Perfil.filtrar(this, Iptv.atual.daAba(this, abaAtual)).let { l -> if (escondidos.isEmpty()) l else l.filter { it.url !in escondidos } }
         // Séries: cada série aparece uma vez (o cartão toca os episódios dela)
         episodios = if (ehVod && abaAtual == 1) brutos.groupBy { Iptv.nomeSerie(it.nome) } else emptyMap()
         val daAba = if (episodios.isNotEmpty()) {
@@ -650,7 +1088,8 @@ class IptvActivity : Activity() {
         } else {
             brutos
         }
-        info.text = "$nomeTela · ${Iptv.atual.canais.size} " + if (ehVod) "títulos" else "canais"
+        info.text = "$nomeTela · ${Iptv.atual.canais.size} " + (if (ehVod) "títulos" else "canais") +
+            (Perfil.nome(this)?.let { "  ·  Perfil: $it" + if (Perfil.infantil(this)) " (infantil)" else "" } ?: "")
         if (daAba.isEmpty()) {
             conteudo.addView(
                 TextView(this).apply {
@@ -675,9 +1114,9 @@ class IptvActivity : Activity() {
         if (abaAtual == 0) {
             val porUrl = Iptv.atual.canais.associateBy { it.url }
             val itens = if (ehVod) {
-                Historico.continuar(this).filter { it.url in porUrl }.map { porUrl[it.url]!! }
+                Perfil.filtrar(this, Historico.continuar(this).filter { it.url in porUrl }.map { porUrl[it.url]!! })
             } else {
-                Historico.ultimos(this, Iptv.atual.id).mapNotNull { porUrl[it] }.filter { it.url !in escondidos }
+                Perfil.filtrar(this, Historico.ultimos(this, Iptv.atual.id).mapNotNull { porUrl[it] }).filter { it.url !in escondidos }
             }
             if (itens.isNotEmpty()) linhaMini(if (ehVod) "Continuar assistindo" else "Vistos por último", itens.take(12))
         }
@@ -1143,11 +1582,19 @@ class IptvActivity : Activity() {
                 })
             }
             setOnClickListener { abrir(lista, i) }
+            // Filmes e séries: segurar OK mostra as informações (TMDB)
+            if (ehVod) {
+                setOnLongClickListener {
+                    mostrarInfo(c, lista, i)
+                    true
+                }
+            }
             setOnFocusChangeListener { v, has ->
                 // Chegou perto do fim do que já foi montado: monta mais
                 if (has && lista === gradeLista && i >= gradeFeitos - colunas * 2 && gradeFeitos < gradeLista.size) {
                     v.post { maisCartoes() }
                 }
+                if (has) agendarPrevia(topo, c) else if (previaView?.parent === topo || previaAgendada != null) pararPrevia()
                 anel.setStroke(if (has) dp(3) else 0, Cores.tinta)
                 v.animate().scaleX(if (has) 1.06f else 1f).scaleY(if (has) 1.06f else 1f)
                     .translationY(if (has) -dpf(8) else 0f)

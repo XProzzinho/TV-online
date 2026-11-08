@@ -408,14 +408,16 @@ class PlayerActivity : Activity() {
 
     private fun menu() {
         val itens = mutableListOf("Áudio", "Legenda", "Tela", "Desligar em… (timer)")
-        if (vod) itens += "Velocidade (${fmtVel(velocidade)})"
+        itens += if (vod) "Velocidade (${fmtVel(velocidade)})" else "—"
+        if (podePip()) itens += "Imagem na imagem (canto da tela)"
         escolher("Opções", itens, -1) { i ->
             when (i) {
                 0 -> menuFaixa(C.TRACK_TYPE_AUDIO)
                 1 -> menuFaixa(C.TRACK_TYPE_TEXT)
                 2 -> menuTela()
                 3 -> menuTimer()
-                4 -> menuVelocidade()
+                4 -> if (vod) menuVelocidade()
+                5 -> entrarPip()
             }
         }
     }
@@ -494,6 +496,103 @@ class PlayerActivity : Activity() {
             }
             mostrarFaixa()
         }
+    }
+
+    /** Abriu outro canal com o player já aberto (por exemplo, na imagem na imagem). */
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val nova = Iptv.fila.ifEmpty { Iptv.atual.canais }
+        if (nova.isEmpty()) return
+        guardarPosicao()
+        lista = nova
+        vod = intent.getBooleanExtra("vod", false)
+        indice = intent.getIntExtra("indice", 0).coerceIn(0, lista.size - 1)
+        anterior = -1
+        tocar()
+    }
+
+    // ---------- imagem na imagem (PiP) ----------
+
+    private fun podePip() = android.os.Build.VERSION.SDK_INT >= 26 &&
+        packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE)
+
+    private fun entrarPip() {
+        if (!podePip()) {
+            Toast.makeText(this, "Esta TV não tem imagem na imagem", Toast.LENGTH_SHORT).show()
+            return
+        }
+        try {
+            enterPictureInPictureMode(
+                android.app.PictureInPictureParams.Builder().setAspectRatio(android.util.Rational(16, 9)).build(),
+            )
+        } catch (_: Throwable) {
+            Toast.makeText(this, "Esta TV não deixou abrir a imagem na imagem", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** Apertou Início assistindo TV ao vivo: o canal continua pequeno no canto. */
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (!vod && podePip() && getSharedPreferences("inicio", MODE_PRIVATE).getBoolean("pip_auto", true)) entrarPip()
+    }
+
+    override fun onPictureInPictureModeChanged(pip: Boolean, cfg: android.content.res.Configuration) {
+        super.onPictureInPictureModeChanged(pip, cfg)
+        if (pip) {
+            h.removeCallbacks(esconder)
+            faixa.alpha = 0f
+            numero.visibility = View.GONE
+        }
+    }
+
+    // ---------- touchpad: deslizar troca de canal ----------
+
+    private var toqueY = 0f
+    private var toqueX = 0f
+
+    override fun dispatchGenericMotionEvent(ev: android.view.MotionEvent): Boolean = deslizar(ev) || super.dispatchGenericMotionEvent(ev)
+
+    override fun onTouchEvent(ev: android.view.MotionEvent): Boolean = deslizar(ev) || super.onTouchEvent(ev)
+
+    private fun deslizar(ev: android.view.MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> {
+                toqueX = ev.x
+                toqueY = ev.y
+                return true
+            }
+            android.view.MotionEvent.ACTION_UP -> {
+                val dx = ev.x - toqueX
+                val dy = ev.y - toqueY
+                val min = dp(60)
+                when {
+                    kotlin.math.abs(dy) > min && kotlin.math.abs(dy) > kotlin.math.abs(dx) -> {
+                        if (vod) {
+                            if (lista.size > 1) trocar(if (dy < 0) 1 else -1)
+                        } else {
+                            trocar(if (dy < 0) 1 else -1)
+                        }
+                    }
+                    kotlin.math.abs(dx) > min -> {
+                        if (vod) {
+                            player.seekTo((player.currentPosition + if (dx > 0) 15000 else -15000).coerceAtLeast(0))
+                            mostrarFaixa()
+                        } else if (dx < 0 && anterior in lista.indices) {
+                            irPara(anterior)
+                        } else {
+                            menu()
+                        }
+                    }
+                    else -> {
+                        if (vod) player.playWhenReady = !player.playWhenReady
+                        mostrarFaixa()
+                    }
+                }
+                return true
+            }
+        }
+        return false
     }
 
     // ---------- teclas do controle ----------
@@ -584,6 +683,8 @@ class PlayerActivity : Activity() {
 
     override fun onStop() {
         super.onStop()
+        // Fechou a janelinha da imagem na imagem: para de vez
+        if (android.os.Build.VERSION.SDK_INT >= 26 && isInPictureInPictureMode) finish()
         guardarPosicao()
         h.removeCallbacks(guardar)
         if (::player.isInitialized) player.pause()

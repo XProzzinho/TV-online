@@ -128,13 +128,16 @@ class ListaM3u(private val chave: String, val vod: Boolean, private val fixo: St
 
     // ---------- favoritos e último ----------
 
-    fun favoritos(ctx: Context): Set<String> = sp(ctx).getStringSet("${chave}_fav", emptySet())!!
+    /** Favoritos do perfil em uso (cada perfil do Início TV tem os seus). */
+    private fun chaveFav(ctx: Context) = "${chave}_fav" + Perfil.sufixoFavoritos(ctx)
+
+    fun favoritos(ctx: Context): Set<String> = sp(ctx).getStringSet(chaveFav(ctx), emptySet())!!
 
     /** Liga/desliga o favorito. Devolve true se agora é favorito. */
     fun trocarFavorito(ctx: Context, c: Iptv.Canal): Boolean {
         val f = favoritos(ctx).toMutableSet()
         val agora = if (c.url in f) { f.remove(c.url); false } else { f.add(c.url); true }
-        sp(ctx).edit().putStringSet("${chave}_fav", f).apply()
+        sp(ctx).edit().putStringSet(chaveFav(ctx), f).apply()
         return agora
     }
 

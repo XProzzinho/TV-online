@@ -17,7 +17,8 @@ import java.util.concurrent.Executors
  * O Início TV só toca as listas que a pessoa escolher.
  */
 object Iptv {
-    data class Canal(val nome: String, val grupo: String, val logo: String?, val url: String)
+    /** [id] = tvg-id da lista (é por ele que o guia de programação acha o canal). */
+    data class Canal(val nome: String, val grupo: String, val logo: String?, val url: String, val id: String = "")
 
     val aoVivo = ListaM3u("iptv", vod = false)
     val vod = ListaM3u("vod", vod = true)
@@ -99,7 +100,13 @@ class ListaM3u(private val chave: String, val vod: Boolean, private val fixo: St
     private val main get() = Iptv.main
 
     var canais: List<Iptv.Canal> = emptyList()
-        private set
+        private set(v) {
+            field = v
+            porAba.clear()
+        }
+
+    /** Abas já separadas (não refaz o filtro a cada troca de aba). */
+    private val porAba = HashMap<Int, List<Iptv.Canal>>()
 
     private fun sp(ctx: Context) = ctx.getSharedPreferences("inicio", Context.MODE_PRIVATE)
     private fun cache(ctx: Context) = File(ctx.filesDir, "lista_$chave.m3u")
@@ -129,6 +136,13 @@ class ListaM3u(private val chave: String, val vod: Boolean, private val fixo: St
     }
 
     fun salvarUltimo(ctx: Context, c: Iptv.Canal) = sp(ctx).edit().putString("${chave}_ultimo", c.url).apply()
+
+    /** Link do último canal assistido nesta lista. */
+    fun ultimo(ctx: Context): String? = sp(ctx).getString("${chave}_ultimo", null)
+
+    /** Abrir direto no último canal quando o Lumi TV abre (ligado/desligado). */
+    fun abrirNoUltimo(ctx: Context): Boolean = sp(ctx).getBoolean("abrir_no_ultimo", false)
+    fun mudarAbrirNoUltimo(ctx: Context, v: Boolean) = sp(ctx).edit().putBoolean("abrir_no_ultimo", v).apply()
 
     // ---------- abas ----------
 
@@ -165,6 +179,12 @@ class ListaM3u(private val chave: String, val vod: Boolean, private val fixo: St
     /** Itens de cada aba: separa pelo grupo da lista (e pelo tipo do link, nas listas Xtream). */
     fun daAba(ctx: Context, aba: Int): List<Iptv.Canal> {
         val ultima = abas.size - 1
+        // Destaques muda com os favoritos; as outras abas ficam guardadas
+        if (vod || aba != 0) porAba[aba]?.let { return it }
+        return separar(ctx, aba, ultima).also { if (vod || aba != 0) porAba[aba] = it }
+    }
+
+    private fun separar(ctx: Context, aba: Int, ultima: Int): List<Iptv.Canal> {
         if (aba == ultima) return canais
         if (!vod && aba == 0) {
             // Destaques: favoritos primeiro, depois os primeiros canais da lista
@@ -198,29 +218,43 @@ class ListaM3u(private val chave: String, val vod: Boolean, private val fixo: St
         pool.execute {
             val arq = cache(app)
             var erro: String? = null
+            var renovarDepois = false
             try {
                 val velho = !arq.exists() || System.currentTimeMillis() - arq.lastModified() > VALIDADE
-                if (forcar || velho) {
+                if (forcar || !arq.exists()) {
                     try {
                         baixar(url, arq)
                     } catch (t: Throwable) {
                         if (!arq.exists()) throw t // sem internet: usa a cópia antiga se tiver
                     }
+                } else if (velho) {
+                    // Abre na hora com a cópia salva e baixa a nova por trás
+                    renovarDepois = true
                 }
-                val lista = ler(arq)
-                // Lista Xtream completa na aba de filmes: fica só com filmes e séries
-                val final = if (vod && lista.any { it.url.contains("/movie/") || it.url.contains("/series/") }) {
-                    lista.filter { it.url.contains("/movie/") || it.url.contains("/series/") }
-                } else {
-                    lista
-                }
-                if (final.isEmpty()) erro = "A lista está vazia" else canais = final
+                val final = filtrar(ler(arq))
+                if (final.isEmpty()) erro = "A lista está vazia" else main.post { canais = final }
             } catch (t: Throwable) {
                 erro = "Não consegui baixar a lista"
             }
             main.post { cb(erro) }
+            if (renovarDepois) {
+                try {
+                    baixar(url, arq)
+                    val nova = filtrar(ler(arq))
+                    if (nova.isNotEmpty()) main.post { canais = nova }
+                } catch (_: Throwable) {
+                }
+            }
         }
     }
+
+    /** Lista Xtream completa na aba de filmes: fica só com filmes e séries. */
+    private fun filtrar(lista: List<Iptv.Canal>) =
+        if (vod && lista.any { it.url.contains("/movie/") || it.url.contains("/series/") }) {
+            lista.filter { it.url.contains("/movie/") || it.url.contains("/series/") }
+        } else {
+            lista
+        }
 
     private fun baixar(link: String, destino: File) {
         var url = URL(link)
@@ -247,29 +281,43 @@ class ListaM3u(private val chave: String, val vod: Boolean, private val fixo: St
         tmp.renameTo(destino)
     }
 
-    private val attr = Regex("""([\w-]+)="([^"]*)"""")
+    /** Valor de um atributo (tvg-logo="…") sem usar Regex: bem mais rápido em listas grandes. */
+    private fun atributo(l: String, nome: String): String? {
+        var i = l.indexOf("$nome=\"", ignoreCase = true)
+        if (i < 0) return null
+        i += nome.length + 2
+        val f = l.indexOf('"', i)
+        return if (f < 0) null else l.substring(i, f)
+    }
 
     /** Lê o M3U: #EXTINF com tvg-logo, group-title e o nome depois da vírgula; a linha seguinte é o link. */
     private fun ler(arq: File): List<Iptv.Canal> {
-        val out = ArrayList<Iptv.Canal>()
+        val out = ArrayList<Iptv.Canal>(4096)
+        val grupos = HashMap<String, String>() // o mesmo texto de grupo é guardado uma vez só
         var nome: String? = null
         var grupo = ""
         var logo: String? = null
-        arq.bufferedReader().useLines { linhas ->
+        var id = ""
+        arq.bufferedReader(Charsets.UTF_8, 64 * 1024).useLines { linhas ->
             for (bruta in linhas) {
                 val l = bruta.trim()
                 when {
                     l.startsWith("#EXTINF", ignoreCase = true) -> {
-                        val attrs = attr.findAll(l).associate { it.groupValues[1].lowercase() to it.groupValues[2] }
-                        nome = l.substringAfterLast(',').trim().ifBlank { attrs["tvg-name"] ?: "Canal" }
-                        grupo = attrs["group-title"]?.split(';')?.firstOrNull()?.trim().orEmpty()
-                        logo = attrs["tvg-logo"]?.takeIf { it.startsWith("http") }
+                        // O nome vem depois da última vírgula que está fora das aspas
+                        val aspas = l.lastIndexOf('"')
+                        val virgula = l.indexOf(',', if (aspas > 0) aspas else 0)
+                        nome = (if (virgula >= 0) l.substring(virgula + 1).trim() else "")
+                            .ifBlank { atributo(l, "tvg-name") ?: "Canal" }
+                        val g = atributo(l, "group-title")?.substringBefore(';')?.trim().orEmpty()
+                        grupo = grupos.getOrPut(g) { g }
+                        logo = atributo(l, "tvg-logo")?.takeIf { it.startsWith("http") }
+                        id = atributo(l, "tvg-id").orEmpty()
                     }
                     l.startsWith("#EXTGRP", ignoreCase = true) -> grupo = l.substringAfter(':').trim()
                     l.isEmpty() || l.startsWith("#") -> Unit
                     else -> {
                         if (nome != null && (l.startsWith("http") || l.startsWith("rtmp") || l.startsWith("rtsp"))) {
-                            val item = Iptv.Canal(nome!!, grupo.ifBlank { "Outros" }, logo, l)
+                            val item = Iptv.Canal(nome!!, grupo.ifBlank { "Outros" }, logo, l, id)
                             // Lista Xtream completa: TV ao vivo ignora filmes/séries
                             val ehVod = l.contains("/movie/") || l.contains("/series/")
                             if (vod || !ehVod) out += item
@@ -277,6 +325,7 @@ class ListaM3u(private val chave: String, val vod: Boolean, private val fixo: St
                         nome = null
                         grupo = ""
                         logo = null
+                        id = ""
                     }
                 }
             }

@@ -1,4 +1,4 @@
-name: Atualizar minha lista M3U
+name: Atualizar minha lista e o guia
 
 # Monta listas/minha.m3u de novo a cada 6 horas (os links da Pluto TV mudam)
 on:
@@ -16,11 +16,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Montar a lista
         run: python3 listas/gerar.py
+      - name: Montar o guia de programação
+        run: python3 listas/guia.py
       - name: Salvar
         run: |
           git config user.name "Lumi TV"
           git config user.email "geansdp2@gmail.com"
-          git add listas/minha.m3u
+          git add listas/minha.m3u listas/guia.json
           git diff --cached --quiet && exit 0
-          git commit -m "Lista M3U atualizada"
+          git commit -m "Lista e guia atualizados"
           git push

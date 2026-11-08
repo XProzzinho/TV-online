@@ -75,6 +75,17 @@ class IptvActivity : Activity() {
     private lateinit var abasRow: LinearLayout
     private val botoesModo = ArrayList<TextView>()
 
+    /** Grade em pedaços: monta 40 cartões e o resto conforme você desce. */
+    private var gradeLista: List<Iptv.Canal> = emptyList()
+    private var gradeFeitos = 0
+    private var gradeLinha: LinearLayout? = null
+    private var gradeFavs: Set<String> = emptySet()
+    private var gradeLarg = 0
+    private val PEDACO = 40
+
+    /** Para abrir no último canal só uma vez, quando o app abre. */
+    private var jaAbriuUltimo = false
+
     /** O que o player vai tocar: os episódios da série ou a lista da tela. */
     private fun abrir(lista: List<Iptv.Canal>, i: Int) {
         val c = lista[i]
@@ -100,7 +111,24 @@ class IptvActivity : Activity() {
         Iptv.atual = Iptv.listas[modo]
         abaAtual = intent.getIntExtra("aba", 0).coerceIn(0, Iptv.atual.abas.size - 1)
         setContentView(montar())
+        jaAbriuUltimo = savedInstanceState != null
         carregar(false)
+        // Guia de programação: quando chegar, mostra "Agora" nos cartões
+        Guia.carregar(this) { if (!isFinishing && !ehVod && Iptv.atual.canais.isNotEmpty()) mostrar() }
+    }
+
+    /** Liga o último canal assistido assim que a lista carrega (se a opção estiver ligada). */
+    private fun abrirUltimoSeLigado() {
+        if (jaAbriuUltimo || ehVod) return
+        jaAbriuUltimo = true
+        if (!Iptv.atual.abrirNoUltimo(this)) return
+        val u = Iptv.atual.ultimo(this) ?: return
+        val lista = Iptv.atual.canais
+        val i = lista.indexOfFirst { it.url == u }
+        if (i >= 0) {
+            Iptv.fila = lista
+            startActivity(Intent(this, PlayerActivity::class.java).putExtra("indice", i).putExtra("vod", false))
+        }
     }
 
     override fun onResume() {
@@ -394,11 +422,19 @@ class IptvActivity : Activity() {
             d.dismiss()
             carregar(true)
         }, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(12) })
-        row.addView(botao("Canais abertos do Brasil") {
-            aoVivo.setText("https://iptv-org.github.io/iptv/countries/br.m3u")
+        row.addView(botao("Minha lista grátis") {
+            aoVivo.setText("https://raw.githubusercontent.com/XProzzinho/TV-online/main/listas/minha.m3u")
         }, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(12) })
         row.addView(botao("Cancelar") { d.dismiss() })
         box.addView(row)
+        // Abrir direto no último canal
+        fun textoUltimo() = "Abrir no último canal: " + if (Iptv.atual.abrirNoUltimo(this)) "LIGADO" else "desligado"
+        val ult = botao(textoUltimo()) {}
+        ult.setOnClickListener {
+            Iptv.atual.mudarAbrirNoUltimo(this, !Iptv.atual.abrirNoUltimo(this))
+            ult.text = textoUltimo()
+        }
+        box.addView(ult, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(14) })
         d.setContentView(box)
         d.show()
         aoVivo.requestFocus()
@@ -497,7 +533,10 @@ class IptvActivity : Activity() {
         Iptv.atual.carregar(this, forcar) { erro ->
             if (isFinishing) return@carregar
             when (erro) {
-                null -> mostrar()
+                null -> {
+                    mostrar()
+                    abrirUltimoSeLigado()
+                }
                 "sem lista" -> vazio(
                     (if (ehVod) "Nenhuma lista de filmes e séries ainda.\n" else "Nenhuma lista de canais ainda.\n") +
                         "Aperte OK para colocar o link da lista aqui na TV (ou mande pelo Controle TV).",
@@ -594,22 +633,38 @@ class IptvActivity : Activity() {
         val lista = if (subgrupo == null) daAba else daAba.filter { it.grupo == subgrupo }
         Iptv.fila = lista
         conteudo.addView(secao((subgrupo ?: "Todos os canais") + " · ${lista.size}"))
-        val favs = Iptv.atual.favoritos(this)
-        val larg = (resources.displayMetrics.widthPixels - dp(112) - dp(16) * (colunas - 1)) / colunas
-        var linha: LinearLayout? = null
-        lista.take(600).forEachIndexed { i, c ->
+        gradeFavs = Iptv.atual.favoritos(this)
+        gradeLarg = (resources.displayMetrics.widthPixels - dp(112) - dp(16) * (colunas - 1)) / colunas
+        gradeLista = lista
+        gradeFeitos = 0
+        gradeLinha = null
+        maisCartoes()
+    }
+
+    /** Põe mais um pedaço de cartões na grade (chamado de novo quando você chega perto do fim). */
+    private fun maisCartoes() {
+        val lista = gradeLista
+        val ate = (gradeFeitos + PEDACO).coerceAtMost(lista.size)
+        val comGuia = !ehVod && Guia.pronto
+        for (i in gradeFeitos until ate) {
             if (i % colunas == 0) {
-                linha = LinearLayout(this).apply {
+                gradeLinha = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
                     clipChildren = false
                     clipToPadding = false
                 }
-                conteudo.addView(linha, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(16) })
+                conteudo.addView(gradeLinha, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(16) })
             }
-            val lp = LinearLayout.LayoutParams(larg, (larg * (if (ehVod) 1.5f else 0.72f)).toInt())
+            val alt = gradeLarg * when {
+                ehVod -> 1.5f
+                comGuia -> 0.92f
+                else -> 0.72f
+            }
+            val lp = LinearLayout.LayoutParams(gradeLarg, alt.toInt())
             if (i % colunas != colunas - 1) lp.rightMargin = dp(16)
-            linha!!.addView(cartao(c, lista, i, c.url in favs), lp)
+            gradeLinha!!.addView(cartao(lista[i], lista, i, lista[i].url in gradeFavs), lp)
         }
+        gradeFeitos = ate
     }
 
     /** Bloco de categoria: branco com o nome e a quantidade; o escolhido fica com contorno. */
@@ -691,6 +746,8 @@ class IptvActivity : Activity() {
         val grupo = TextView(this).apply {
             textSize = 16f
             setTextColor(Cores.cinza)
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
         }
         // Botão branco "▶ Assistir" (o destaque inteiro é o botão: OK abre)
         val dica = TextView(this).apply {
@@ -738,7 +795,12 @@ class IptvActivity : Activity() {
             atual = i
             val c = roda[i]
             nome.text = c.nome
-            grupo.text = c.grupo
+            val (ag, dep) = if (ehVod) null to null else Guia.agora(c)
+            grupo.text = if (ag != null) {
+                "Agora: ${ag.titulo}  ·  até ${Guia.hora(ag.fim)}" + (dep?.let { "\nDepois: ${it.titulo}" } ?: "")
+            } else {
+                c.grupo
+            }
             logo.setImageDrawable(null)
             c.logo?.let { u -> Iptv.logo(u) { b -> if (b != null && roda[atual] == c) logo.setImageBitmap(b) } }
             bolinhas.forEachIndexed { k, v ->
@@ -831,6 +893,21 @@ class IptvActivity : Activity() {
         return linha
     }
 
+    /** Barrinha fina: cinza no fundo e vermelha até onde o programa já passou. */
+    private fun barraProgresso(p: Float): View {
+        val fundo = FrameLayout(this).apply { background = redondo(Cores.campo, dpf(2)) }
+        val cheio = View(this).apply { background = redondo(Cores.vivo, dpf(2)) }
+        fundo.addView(cheio, FrameLayout.LayoutParams(0, -1))
+        fundo.addOnLayoutChangeListener { v, l, _, rr, _, _, _, _, _ ->
+            val w = ((rr - l) * p).toInt()
+            if (cheio.layoutParams.width != w) {
+                cheio.layoutParams = FrameLayout.LayoutParams(w, -1)
+                v.post { cheio.requestLayout() }
+            }
+        }
+        return fundo
+    }
+
     private fun cartao(c: Iptv.Canal, lista: List<Iptv.Canal>, i: Int, fav: Boolean): View {
         val bg = redondo(Cores.janela, dpf(18)).apply { setStroke(dp(1), Cores.linha) }
         val anel = GradientDrawable().apply {
@@ -869,6 +946,20 @@ class IptvActivity : Activity() {
             gravity = Gravity.CENTER
             setPadding(dp(8), dp(if (ehVod) 8 else 0), dp(8), dp(10))
         }
+        // Guia: o programa de agora e quanto já passou
+        val (agora, _) = if (ehVod) null to null else Guia.agora(c)
+        val prog = agora?.let { p ->
+            TextView(this).apply {
+                text = p.titulo
+                textSize = 12f
+                setTextColor(Cores.cinza)
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+                gravity = Gravity.CENTER
+                setPadding(dp(8), 0, dp(8), dp(6))
+            }
+        }
+        val barra = agora?.let { p -> barraProgresso(p.progresso()) }
         val topo = FrameLayout(this)
         topo.addView(letra, FrameLayout.LayoutParams(-1, -1))
         topo.addView(img, FrameLayout.LayoutParams(-1, -1))
@@ -893,8 +984,21 @@ class IptvActivity : Activity() {
             isClickable = true
             addView(topo, LinearLayout.LayoutParams(-1, 0, 1f))
             addView(nome)
+            if (prog != null) {
+                nome.setPadding(dp(8), 0, dp(8), dp(2))
+                addView(prog)
+                addView(barra!!, LinearLayout.LayoutParams(-1, dp(4)).apply {
+                    leftMargin = dp(14)
+                    rightMargin = dp(14)
+                    bottomMargin = dp(10)
+                })
+            }
             setOnClickListener { abrir(lista, i) }
             setOnFocusChangeListener { v, has ->
+                // Chegou perto do fim do que já foi montado: monta mais
+                if (has && lista === gradeLista && i >= gradeFeitos - colunas * 2 && gradeFeitos < gradeLista.size) {
+                    v.post { maisCartoes() }
+                }
                 anel.setStroke(if (has) dp(3) else 0, Cores.tinta)
                 v.animate().scaleX(if (has) 1.06f else 1f).scaleY(if (has) 1.06f else 1f)
                     .translationY(if (has) -dpf(8) else 0f)
@@ -904,7 +1008,9 @@ class IptvActivity : Activity() {
         c.logo?.let { u ->
             Iptv.logo(u) { b ->
                 if (b != null) {
+                    img.alpha = 0f
                     img.setImageBitmap(b)
+                    img.animate().alpha(1f).setDuration(220).start()
                     letra.visibility = View.INVISIBLE
                 }
             }
@@ -913,239 +1019,3 @@ class IptvActivity : Activity() {
     }
 }
 
-/**
- * Assistindo um canal: tela cheia.
- * Cima = próximo canal, baixo = anterior, OK = informações, segurar OK = favorito.
- */
-class PlayerActivity : Activity() {
-
-    private lateinit var player: ExoPlayer
-    private lateinit var faixa: LinearLayout
-    private lateinit var faixaNome: TextView
-    private lateinit var faixaSub: TextView
-    private lateinit var faixaLogo: ImageView
-    private lateinit var aviso: TextView
-    private var lista: List<Iptv.Canal> = emptyList()
-    private var indice = 0
-    private var vod = false
-    private val h = Handler(Looper.getMainLooper())
-    private val esconder = Runnable { faixa.animate().alpha(0f).setDuration(300).start() }
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        lista = Iptv.fila.ifEmpty { Iptv.atual.canais }
-        vod = intent.getBooleanExtra("vod", false)
-        indice = intent.getIntExtra("indice", 0)
-        if (lista.isEmpty()) {
-            finish()
-            return
-        }
-
-        // Pluto TV toca melhor (e em HD) quando acha que é um navegador
-        val ehPluto = lista.any { it.url.contains("pluto.tv") }
-        val fonte = DefaultHttpDataSource.Factory()
-            .setAllowCrossProtocolRedirects(true)
-            .setUserAgent(
-                if (ehPluto) "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
-                else "InicioTV",
-            )
-            .setConnectTimeoutMs(15000)
-            .setReadTimeoutMs(20000)
-        player = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(this).setDataSourceFactory(fonte))
-            .build()
-        player.addListener(object : Player.Listener {
-            override fun onPlayerError(error: PlaybackException) {
-                aviso.text = if (vod) "Não consegui abrir este título agora." else "Este canal está fora do ar agora.\nUse cima/baixo para trocar."
-                aviso.visibility = View.VISIBLE
-            }
-
-            override fun onPlaybackStateChanged(state: Int) {
-                if (state == Player.STATE_READY) aviso.visibility = View.GONE
-                if (state == Player.STATE_BUFFERING && aviso.visibility != View.VISIBLE) {
-                    // nada: o vídeo mostra o carregamento sozinho
-                }
-            }
-        })
-
-        val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
-        val tela = PlayerView(this).apply {
-            useController = false
-            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-            setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
-            this.player = this@PlayerActivity.player
-        }
-        root.addView(tela, FrameLayout.LayoutParams(-1, -1))
-
-        // Faixa branca embaixo com o canal (some sozinha)
-        faixa = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            background = redondo(Cores.janela, dpf(24))
-            elevation = dpf(6)
-            setPadding(dp(14), dp(12), dp(24), dp(12))
-        }
-        faixaLogo = ImageView(this).apply {
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            background = redondo(Cores.campo, dpf(14))
-            setPadding(dp(6), dp(6), dp(6), dp(6))
-        }
-        faixa.addView(faixaLogo, LinearLayout.LayoutParams(dp(72), dp(52)))
-        val txt = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), 0, 0, 0)
-        }
-        faixaNome = TextView(this).apply {
-            textSize = 22f
-            setTextColor(Cores.tinta)
-            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-        }
-        faixaSub = TextView(this).apply {
-            textSize = 14f
-            setTextColor(Cores.cinza)
-        }
-        txt.addView(faixaNome)
-        txt.addView(faixaSub)
-        faixa.addView(txt)
-        root.addView(
-            faixa,
-            FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START).apply {
-                leftMargin = dp(48)
-                bottomMargin = dp(40)
-            },
-        )
-
-        aviso = TextView(this).apply {
-            textSize = 20f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            background = redondo(0xCC000000.toInt(), dpf(20))
-            setPadding(dp(28), dp(18), dp(28), dp(18))
-            visibility = View.GONE
-        }
-        root.addView(aviso, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
-        setContentView(root)
-        tocar()
-    }
-
-    private fun tocar() {
-        val c = lista[indice]
-        Iptv.atual.salvarUltimo(this, c)
-        aviso.visibility = View.GONE
-        val item = MediaItem.Builder().setUri(Uri.parse(c.url)).apply {
-            if (c.url.contains(".m3u8", ignoreCase = true)) setMimeType(MimeTypes.APPLICATION_M3U8)
-        }.build()
-        player.setMediaItem(item)
-        player.prepare()
-        player.playWhenReady = true
-        mostrarFaixa()
-    }
-
-    private fun mostrarFaixa() {
-        val c = lista[indice]
-        val fav = c.url in Iptv.atual.favoritos(this)
-        if (vod) {
-            val pos = player.currentPosition / 1000
-            val dur = player.duration.takeIf { it > 0 }?.div(1000)
-            fun t(x: Long) = "%d:%02d:%02d".format(x / 3600, x / 60 % 60, x % 60)
-            faixaNome.text = c.nome
-            faixaSub.text = (if (player.playWhenReady) "▶ " else "❚❚ ") + t(pos) + (dur?.let { " / " + t(it) } ?: "") +
-                "  ·  ◀ ▶ 15 s" + (if (lista.size > 1) "  ·  ▲▼ episódio ${indice + 1}/${lista.size}" else "")
-        } else {
-            faixaNome.text = "${indice + 1}  ${c.nome}"
-            faixaSub.text = c.grupo + (if (fav) "  ·  ★ Favorito" else "  ·  Segure OK para favoritar")
-        }
-        faixaLogo.setImageDrawable(null)
-        c.logo?.let { u -> Iptv.logo(u) { b -> if (b != null && lista[indice] == c) faixaLogo.setImageBitmap(b) } }
-        faixa.animate().cancel()
-        faixa.alpha = 1f
-        h.removeCallbacks(esconder)
-        h.postDelayed(esconder, 4000)
-    }
-
-    private fun trocar(passo: Int) {
-        indice = (indice + passo + lista.size) % lista.size
-        tocar()
-    }
-
-    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        // Filme/série: esquerda/direita voltam e avançam 15 s; OK pausa; cima/baixo mostram o nome
-        if (vod) {
-            when (keyCode) {
-                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_REWIND -> {
-                    player.seekTo((player.currentPosition - 15000).coerceAtLeast(0))
-                    mostrarFaixa()
-                    return true
-                }
-                KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
-                    player.seekTo(player.currentPosition + 15000)
-                    mostrarFaixa()
-                    return true
-                }
-                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
-                    // Série: cima = próximo episódio, baixo = anterior; filme: só mostra o tempo
-                    if (lista.size > 1) trocar(if (keyCode == KeyEvent.KEYCODE_DPAD_UP) 1 else -1) else mostrarFaixa()
-                    return true
-                }
-                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                    player.playWhenReady = !player.playWhenReady
-                    mostrarFaixa()
-                    return true
-                }
-            }
-        }
-        when (keyCode) {
-            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> {
-                trocar(1)
-                return true
-            }
-            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> {
-                trocar(-1)
-                return true
-            }
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                event.startTracking()
-                return true
-            }
-        }
-        return super.onKeyDown(keyCode, event)
-    }
-
-    override fun onKeyLongPress(keyCode: Int, event: KeyEvent): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
-            val agora = Iptv.atual.trocarFavorito(this, lista[indice])
-            Toast.makeText(this, if (agora) "★ Favorito" else "Tirado dos favoritos", Toast.LENGTH_SHORT).show()
-            mostrarFaixa()
-            return true
-        }
-        return super.onKeyLongPress(keyCode, event)
-    }
-
-    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
-        if ((keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) && !event.isCanceled) {
-            if (event.flags and KeyEvent.FLAG_CANCELED_LONG_PRESS == 0) {
-                if (vod) player.playWhenReady = !player.playWhenReady
-                mostrarFaixa()
-            }
-            return true
-        }
-        return super.onKeyUp(keyCode, event)
-    }
-
-    override fun onStop() {
-        super.onStop()
-        if (::player.isInitialized) player.pause()
-    }
-
-    override fun onStart() {
-        super.onStart()
-        if (::player.isInitialized) player.play()
-    }
-
-    override fun onDestroy() {
-        h.removeCallbacks(esconder)
-        if (::player.isInitialized) player.release()
-        super.onDestroy()
-    }
-}

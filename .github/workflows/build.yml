@@ -38,6 +38,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.${{ github.run_number }}
-          name: TV Online v1.${{ github.run_number }}
+          name: Lumi TV v1.${{ github.run_number }}
           make_latest: "true"
           files: tv-online.apk

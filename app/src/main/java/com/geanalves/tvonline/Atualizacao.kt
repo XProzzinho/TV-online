@@ -16,7 +16,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * Confere no GitHub se tem versão nova do TV Online.
+ * Confere no GitHub se tem versão nova do Lumi TV.
  * Quem instalou pela Play Store recebe as atualizações pela própria loja (regra do Google).
  */
 object Atualizacao {

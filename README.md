@@ -1,4 +1,4 @@
-# TV Online
+# Lumi TV
 
 App de TV (Android TV e Fire TV Stick) com o mesmo visual do **Início TV**:
 

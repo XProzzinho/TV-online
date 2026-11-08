@@ -160,7 +160,7 @@ class IptvActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             clipChildren = false
         }
-        val logo = android.text.SpannableString("●  TV Online")
+        val logo = android.text.SpannableString("●  Lumi TV")
         logo.setSpan(android.text.style.ForegroundColorSpan(Cores.vivo), 0, 1, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         logo.setSpan(android.text.style.RelativeSizeSpan(0.6f), 0, 1, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         tituloRow.addView(
@@ -441,7 +441,7 @@ class IptvActivity : Activity() {
         val atualizar = botao("Atualizar") {
             if (baixando) return@botao
             if (android.os.Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
-                Toast.makeText(this, "Permita o TV Online instalar apps e aperte Atualizar de novo", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Permita o Lumi TV instalar apps e aperte Atualizar de novo", Toast.LENGTH_LONG).show()
                 try {
                     startActivity(Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
                 } catch (_: Throwable) {

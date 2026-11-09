@@ -66,6 +66,115 @@ class PlayerActivity : Activity() {
     private var anterior = -1
     private var vod = false
     private var tentou = false
+    private var tentativas = 0
+    private lateinit var raiz: FrameLayout
+    private var pular: TextView? = null
+    private val conferePular = object : Runnable {
+        override fun run() {
+            if (isFinishing) return
+            val p = pular
+            if (p != null) {
+                val mostrar = vod && lista.size > 1 && player.isPlaying &&
+                    player.currentPosition in 5_000L..300_000L
+                p.visibility = if (mostrar) View.VISIBLE else View.GONE
+            }
+            h.postDelayed(this, 1000)
+        }
+    }
+
+    private fun pularVisivel() = pular?.visibility == View.VISIBLE
+
+    private fun pularAbertura() {
+        player.seekTo(player.currentPosition + 85_000)
+        pular?.visibility = View.GONE
+        Toast.makeText(this, "Abertura pulada", Toast.LENGTH_SHORT).show()
+    }
+    private var painel: View? = null
+
+    /** Lista de canais na esquerda, por cima do vídeo (o canal continua tocando). */
+    private fun abrirPainel() {
+        if (painel != null) return
+        val caixa = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(18), dp(14), dp(18))
+        }
+        caixa.addView(TextView(this).apply {
+            text = "Canais"
+            textSize = 22f
+            setTextColor(Color.WHITE)
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+            setPadding(dp(8), 0, 0, dp(10))
+        })
+        var focar: View? = null
+        lista.forEachIndexed { i, c ->
+            val bg = redondo(Color.TRANSPARENT, dpf(14))
+            val nm = TextView(this).apply {
+                text = "%02d   %s".format(i + 1, c.nome)
+                textSize = 16f
+                setTextColor(if (i == indice) Color.WHITE else 0xFFB0B0B8.toInt())
+                typeface = if (i == indice) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }
+            val item = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = bg
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                isFocusable = true
+                isClickable = true
+                if (i == indice) addView(View(this@PlayerActivity).apply { background = redondo(Cores.vivo, dpf(4)) }, LinearLayout.LayoutParams(dp(8), dp(8)).apply { rightMargin = dp(8) })
+                addView(nm, LinearLayout.LayoutParams(0, -2, 1f))
+                setOnClickListener {
+                    fecharPainel()
+                    if (i != indice) irPara(i)
+                }
+                setOnFocusChangeListener { _, has ->
+                    bg.setColor(if (has) Color.WHITE else Color.TRANSPARENT)
+                    nm.setTextColor(if (has) 0xFF07070A.toInt() else if (i == indice) Color.WHITE else 0xFFB0B0B8.toInt())
+                }
+            }
+            caixa.addView(item, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(4) })
+            if (i == indice) focar = item
+        }
+        val sc = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xF207070A.toInt(), 0xCC07070A.toInt()))
+            addView(caixa)
+        }
+        raiz.addView(sc, FrameLayout.LayoutParams(dp(380), -1, Gravity.START))
+        painel = sc
+        sc.translationX = -dpf(380)
+        sc.animate().translationX(0f).setDuration(220).start()
+        focar?.post { focar?.requestFocus() }
+    }
+
+    private fun fecharPainel() {
+        val p = painel ?: return
+        painel = null
+        p.animate().translationX(-dpf(380)).setDuration(180).withEndAction { raiz.removeView(p) }.start()
+    }
+    private val vigia = Runnable {
+        // Ficou mais de 20 s carregando: tenta de novo sozinho
+        if (!isFinishing && player.playbackState == Player.STATE_BUFFERING) reconectar()
+    }
+
+    /** Tenta abrir de novo (internet que caiu, link que venceu): 1,5 s, 4 s e 8 s. */
+    private fun reconectar(): Boolean {
+        if (tentativas >= 3) return false
+        val espera = longArrayOf(1500, 4000, 8000)[tentativas]
+        tentativas++
+        aviso.text = "Reconectando… ($tentativas/3)"
+        aviso.visibility = View.VISIBLE
+        val pos = if (vod) player.currentPosition else 0L
+        h.postDelayed({
+            if (!isFinishing) {
+                tocar(manterTentativa = true)
+                if (vod && pos > 0) retomar = pos
+            }
+        }, espera)
+        return true
+    }
     private var digitado = ""
     private var timerFim = 0L
     private val h = Handler(Looper.getMainLooper())
@@ -120,21 +229,21 @@ class PlayerActivity : Activity() {
             .build()
         player.addListener(object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
-                // Tenta de novo uma vez sozinho (link da Pluto que venceu, internet que piscou)
-                if (!tentou) {
-                    tentou = true
-                    h.postDelayed({ if (!isFinishing) tocar(manterTentativa = true) }, 1500)
-                    return
-                }
+                // Reconecta sozinho até 3 vezes antes de desistir
+                tentou = true
+                if (reconectar()) return
                 if (!vod) Historico.marcarQuebrado(this@PlayerActivity, lista[indice].url)
                 aviso.text = if (vod) "Não consegui abrir este título agora." else "Este canal está fora do ar agora.\nUse cima/baixo para trocar."
                 aviso.visibility = View.VISIBLE
             }
 
             override fun onPlaybackStateChanged(state: Int) {
+                h.removeCallbacks(vigia)
+                if (state == Player.STATE_BUFFERING) h.postDelayed(vigia, 20_000)
                 if (state == Player.STATE_READY) {
                     aviso.visibility = View.GONE
                     tentou = false
+                    tentativas = 0
                     val c = lista[indice]
                     if (!vod) {
                         Historico.funcionou(this@PlayerActivity, c.url)
@@ -246,12 +355,31 @@ class PlayerActivity : Activity() {
             visibility = View.GONE
         }
         root.addView(aviso, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+        // Botão "Pular abertura" no canto (aparece nos primeiros minutos do episódio)
+        pular = TextView(this).apply {
+            text = "Pular abertura  ▸▸   (OK)"
+            textSize = 17f
+            setTextColor(0xFF07070A.toInt())
+            typeface = Typeface.DEFAULT_BOLD
+            background = redondo(Color.WHITE, dpf(24))
+            setPadding(dp(22), dp(12), dp(22), dp(12))
+            visibility = View.GONE
+        }
+        root.addView(pular, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.END).apply {
+            rightMargin = dp(48)
+            bottomMargin = dp(48)
+        })
         setContentView(root)
+        raiz = root
+        h.post(conferePular)
         tocar()
     }
 
     private fun tocar(manterTentativa: Boolean = false) {
-        if (!manterTentativa) tentou = false
+        if (!manterTentativa) {
+            tentou = false
+            tentativas = 0
+        }
         val c = lista[indice]
         Iptv.atual.salvarUltimo(this, c)
         if (!manterTentativa) Historico.assistiu(this, Iptv.atual.id, c)
@@ -407,7 +535,7 @@ class PlayerActivity : Activity() {
     }
 
     private fun menu() {
-        val itens = mutableListOf("Áudio", "Legenda", "Tela", "Desligar em… (timer)")
+        val itens = mutableListOf("Áudio", "Legenda", "Tela", "Desligar em… (timer)", "Qualidade da imagem")
         itens += if (vod) "Velocidade (${fmtVel(velocidade)})" else "—"
         if (podePip()) itens += "Imagem na imagem (canto da tela)"
         escolher("Opções", itens, -1) { i ->
@@ -416,8 +544,9 @@ class PlayerActivity : Activity() {
                 1 -> menuFaixa(C.TRACK_TYPE_TEXT)
                 2 -> menuTela()
                 3 -> menuTimer()
-                4 -> if (vod) menuVelocidade()
-                5 -> entrarPip()
+                4 -> menuQualidade()
+                5 -> if (vod) menuVelocidade()
+                6 -> entrarPip()
             }
         }
     }
@@ -434,6 +563,42 @@ class PlayerActivity : Activity() {
     }
 
     /** Lista os áudios ou legendas do canal/filme e deixa escolher. */
+    /** Qualidade: automática ou uma resolução fixa (quando o canal tem mais de uma). */
+    private fun menuQualidade() {
+        val nomes = arrayListOf("Automática")
+        val acoes = arrayListOf<() -> Unit>({
+            player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_VIDEO).build()
+        })
+        var marcado = 0
+        val vistas = HashSet<Int>()
+        for (g in player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_VIDEO }) {
+            val ordem = (0 until g.length).filter { g.isTrackSupported(it) }.sortedByDescending { g.getTrackFormat(it).height }
+            for (j in ordem) {
+                val f = g.getTrackFormat(j)
+                if (f.height <= 0 || !vistas.add(f.height)) continue
+                val rotulo = when {
+                    f.height >= 2160 -> "4K"
+                    f.height >= 1080 -> "Full HD (1080p)"
+                    f.height >= 720 -> "HD (720p)"
+                    else -> "SD (${f.height}p)"
+                }
+                if (player.trackSelectionParameters.overrides.values.any { it.mediaTrackGroup == g.mediaTrackGroup && j in it.trackIndices }) marcado = nomes.size
+                nomes += rotulo
+                val grupo = g.mediaTrackGroup
+                acoes += {
+                    player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                        .setOverrideForType(TrackSelectionOverride(grupo, j)).build()
+                }
+            }
+        }
+        if (nomes.size <= 2) {
+            Toast.makeText(this, "Este ${if (vod) "título" else "canal"} só tem uma qualidade", Toast.LENGTH_SHORT).show()
+            return
+        }
+        escolher("Qualidade da imagem", nomes, marcado) { acoes[it]() }
+    }
+
     private fun menuFaixa(tipo: Int) {
         val grupos = player.currentTracks.groups.filter { it.type == tipo }
         val nomes = ArrayList<String>()
@@ -598,6 +763,14 @@ class PlayerActivity : Activity() {
     // ---------- teclas do controle ----------
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        // Lista de canais aberta: setas andam na lista, Voltar fecha
+        if (painel != null) {
+            if (keyCode == KeyEvent.KEYCODE_BACK) {
+                fecharPainel()
+                return true
+            }
+            return super.onKeyDown(keyCode, event)
+        }
         if (keyCode == KeyEvent.KEYCODE_MENU || keyCode == KeyEvent.KEYCODE_INFO || keyCode == KeyEvent.KEYCODE_SETTINGS) {
             menu()
             return true
@@ -661,6 +834,7 @@ class PlayerActivity : Activity() {
     }
 
     override fun onKeyLongPress(keyCode: Int, event: KeyEvent): Boolean {
+        if (painel != null) return super.onKeyLongPress(keyCode, event)
         if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
             val agora = Iptv.atual.trocarFavorito(this, lista[indice])
             Toast.makeText(this, if (agora) "★ Favorito" else "Tirado dos favoritos", Toast.LENGTH_SHORT).show()
@@ -671,10 +845,19 @@ class PlayerActivity : Activity() {
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        if (painel != null) return super.onKeyUp(keyCode, event)
         if ((keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) && !event.isCanceled) {
             if (event.flags and KeyEvent.FLAG_CANCELED_LONG_PRESS == 0) {
-                if (vod) player.playWhenReady = !player.playWhenReady
-                mostrarFaixa()
+                when {
+                    // Série no começo: OK pula a abertura
+                    vod && pularVisivel() -> pularAbertura()
+                    vod -> {
+                        player.playWhenReady = !player.playWhenReady
+                        mostrarFaixa()
+                    }
+                    // TV ao vivo: OK abre a lista de canais por cima do vídeo
+                    else -> abrirPainel()
+                }
             }
             return true
         }
@@ -697,6 +880,8 @@ class PlayerActivity : Activity() {
     }
 
     override fun onDestroy() {
+        h.removeCallbacks(conferePular)
+        h.removeCallbacks(vigia)
         h.removeCallbacksAndMessages(null)
         if (::player.isInitialized) player.release()
         super.onDestroy()

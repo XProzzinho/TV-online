@@ -780,6 +780,18 @@ class IptvActivity : Activity() {
         }
         box.addView(qb, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10) })
 
+        // Categorias escondidas (segurando OK no bloco da categoria)
+        val nOff = Iptv.atual.gruposEscondidos(this).size
+        if (nOff > 0) {
+            val cg = botao("Mostrar de novo as $nOff categorias escondidas") {}
+            cg.setOnClickListener {
+                Iptv.atual.mostrarTodosGrupos(this)
+                cg.text = "Categorias de volta"
+                mostrar()
+            }
+            box.addView(cg, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10) })
+        }
+
         // Prévia ao vivo nos cartões
         fun textoPrevia() = "Prévia ao vivo no cartão: " + if (previaLigada()) "LIGADA" else "desligada"
         val pv = botao(textoPrevia()) {}
@@ -1214,6 +1226,16 @@ class IptvActivity : Activity() {
             isClickable = true
             addView(nome)
             addView(num)
+            // Segurar OK: esconde esta categoria (volta em "＋ Listas")
+            if (g != null) {
+                setOnLongClickListener {
+                    Iptv.atual.esconderGrupo(this@IptvActivity, g)
+                    Toast.makeText(this@IptvActivity, "Categoria \"$g\" escondida. Para voltar: ＋ Listas", Toast.LENGTH_LONG).show()
+                    if (subgrupo == g) subgrupo = null
+                    mostrar()
+                    true
+                }
+            }
             setOnClickListener {
                 subgrupo = g
                 mostrar()

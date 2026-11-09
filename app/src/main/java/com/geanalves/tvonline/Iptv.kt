@@ -190,7 +190,26 @@ class ListaM3u(private val chave: String, val vod: Boolean, private val fixo: St
         return separar(ctx, aba, ultima).also { if (vod || aba != 0) porAba[aba] = it }
     }
 
+    // ---------- categorias escondidas (13) ----------
+
+    fun gruposEscondidos(ctx: Context): Set<String> = sp(ctx).getStringSet("${chave}_grupos_off", emptySet())!!
+
+    fun esconderGrupo(ctx: Context, g: String) {
+        sp(ctx).edit().putStringSet("${chave}_grupos_off", gruposEscondidos(ctx) + g).apply()
+        porAba.clear()
+    }
+
+    fun mostrarTodosGrupos(ctx: Context) {
+        sp(ctx).edit().remove("${chave}_grupos_off").apply()
+        porAba.clear()
+    }
+
     private fun separar(ctx: Context, aba: Int, ultima: Int): List<Iptv.Canal> {
+        val off = gruposEscondidos(ctx)
+        return separarTudo(ctx, aba, ultima).let { l -> if (off.isEmpty()) l else l.filter { it.grupo !in off } }
+    }
+
+    private fun separarTudo(ctx: Context, aba: Int, ultima: Int): List<Iptv.Canal> {
         if (aba == ultima) return canais
         if (!vod && aba == 0) {
             // Destaques: favoritos primeiro, depois os primeiros canais da lista

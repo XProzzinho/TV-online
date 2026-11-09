@@ -123,12 +123,18 @@ class IptvActivity : Activity() {
         }
         Iptv.atual = Iptv.listas[modo]
         abaAtual = intent.getIntExtra("aba", 0).coerceIn(0, Iptv.atual.abas.size - 1)
+        abaSel = when {
+            intent.getStringExtra("modo") == "vod" -> if (abaAtual == 1) 2 else 1
+            intent.getStringExtra("modo") == "pluto" -> 6
+            intent.hasExtra("modo") -> 5
+            else -> 0
+        }
         setContentView(montar())
         jaAbriuUltimo = savedInstanceState != null
         busca = intent.getStringExtra("busca")?.takeIf { it.isNotBlank() }
         if (busca != null) jaAbriuUltimo = true
         Iptv.aoMudar = { if (!isFinishing && Iptv.atual.canais.isNotEmpty()) mostrar() }
-        carregar(false)
+        if (abaSel == 0) mostrar() else carregar(false)
         // Guia de programação: quando chegar, mostra "Agora" nos cartões
         Guia.carregar(this) { if (!isFinishing && !ehVod && Iptv.atual.canais.isNotEmpty()) mostrar() }
     }
@@ -151,8 +157,8 @@ class IptvActivity : Activity() {
         super.onResume()
         Iptv.atual = Iptv.listas[modo]
         Atualizacao.conferir(this) { v -> if (!isFinishing) avisarAtualizacao(v) }
-        // Volta do player: atualiza os favoritos
-        if (Iptv.atual.canais.isNotEmpty()) mostrar()
+        // Volta do player: atualiza os favoritos e o "Continuar assistindo"
+        if (abaSel == 0 || Iptv.atual.canais.isNotEmpty()) mostrar()
     }
 
     override fun onPause() {
@@ -544,7 +550,7 @@ class IptvActivity : Activity() {
             botoesModo += b
             troca.addView(b)
         }
-        tituloRow.addView(troca)
+        // As abas de cima (INÍCIO, FILMES, SÉRIES…) trocam a lista sozinhas: a troca de modo some
         tituloRow.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
         // Botão Buscar (também pela tecla de busca/microfone do controle)
         val buscaBg = redondo(Cores.janela, dpf(26)).apply { setStroke(dp(1), Cores.linha) }
@@ -612,35 +618,68 @@ class IptvActivity : Activity() {
         return root
     }
 
+    /** Abas de cima, iguais às do app da foto: cada uma aponta para uma lista e uma aba dela. */
+    private data class AbaTopo(val nome: String, val modo: Int, val aba: Int)
+
+    private val abasTopo = listOf(
+        AbaTopo("INÍCIO", -1, 0),
+        AbaTopo("FILMES", 1, 0),
+        AbaTopo("SÉRIES", 1, 1),
+        AbaTopo("KIDS", 1, 2),
+        AbaTopo("ANIME", 1, 3),
+        AbaTopo("AO VIVO", 0, 0),
+        AbaTopo("PLUTO TV", 2, 0),
+        AbaTopo("EXPLORAR", 0, 99),
+    )
+    private var abaSel = 0
+
+    private fun selecionarAba(k: Int) {
+        if (k == abaSel && conteudo.childCount > 0) return
+        abaSel = k
+        busca = null
+        subgrupo = null
+        val t = abasTopo[k]
+        if (t.modo >= 0) {
+            modo = t.modo
+            Iptv.atual = Iptv.listas[modo]
+            abaAtual = if (t.aba == 99) Iptv.atual.abas.size - 1 else t.aba.coerceIn(0, Iptv.atual.abas.size - 1)
+            carregar(false)
+        } else {
+            mostrar()
+        }
+        pintarAbas()
+    }
+
     private fun montarAbas() {
         abasRow.removeAllViews()
         abas.clear()
-        Iptv.atual.abas.forEachIndexed { i, nome ->
-            val bg = redondo(Color.TRANSPARENT, dpf(20))
-            val t = TextView(this).apply {
-                text = nome
-                textSize = 16f
+        abasTopo.forEachIndexed { k, t ->
+            val bg = redondo(Color.TRANSPARENT, dpf(22))
+            val tv = TextView(this).apply {
+                text = if (t.nome == "KIDS") {
+                    // KIDS colorido
+                    android.text.SpannableString("KIDS").also { sp ->
+                        val cores = intArrayOf(0xFFFF6B6B.toInt(), 0xFFFFD166.toInt(), 0xFF5DE0B0.toInt(), 0xFF4DA3FF.toInt())
+                        for (j in 0..3) sp.setSpan(android.text.style.ForegroundColorSpan(cores[j]), j, j + 1, 0)
+                    }
+                } else {
+                    t.nome
+                }
+                textSize = 17f
+                letterSpacing = 0.04f
+                typeface = Typeface.DEFAULT_BOLD
                 setPadding(dp(18), dp(8), dp(18), dp(8))
                 background = bg
                 isFocusable = true
                 isClickable = true
                 setOnFocusChangeListener { _, has ->
-                    if (has && abaAtual != i) {
-                        abaAtual = i
-                        subgrupo = null
-                        mostrar()
-                    }
+                    if (has) selecionarAba(k)
                     pintarAbas()
                 }
-                setOnClickListener {
-                    abaAtual = i
-                    subgrupo = null
-                    mostrar()
-                    pintarAbas()
-                }
+                setOnClickListener { selecionarAba(k) }
             }
-            abas += t
-            abasRow.addView(t, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(10) })
+            abas += tv
+            abasRow.addView(tv, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(6) })
         }
         pintarAbas()
     }
@@ -1024,15 +1063,29 @@ class IptvActivity : Activity() {
     }
 
     /** Mesmas cores das abas da tela inicial: preta selecionada, cinza clarinho na atual. */
+    /** Aba escolhida: contorno branco (como na foto); selecionada pelo controle: branca cheia. */
     private fun pintarAbas() {
-        abas.forEachIndexed { i, t ->
+        abas.forEachIndexed { k, t ->
             val bg = t.background as GradientDrawable
-            val on = t.isFocused || i == abaAtual
-            bg.setColor(if (on) Cores.tinta else Color.TRANSPARENT)
-            bg.setStroke(dp(1), if (on) Cores.tinta else 0x29FFFFFF)
-            t.setTextColor(if (on) Cores.papel else Cores.cinza)
-            t.typeface = if (i == abaAtual) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
-            t.animate().scaleX(if (t.isFocused) 1.08f else 1f).scaleY(if (t.isFocused) 1.08f else 1f).setDuration(120).start()
+            val kids = abasTopo[k].nome == "KIDS"
+            when {
+                t.isFocused -> {
+                    bg.setColor(Cores.tinta)
+                    bg.setStroke(dp(2), Cores.tinta)
+                    if (!kids) t.setTextColor(Cores.papel)
+                }
+                k == abaSel -> {
+                    bg.setColor(Color.TRANSPARENT)
+                    bg.setStroke(dp(2), Cores.tinta)
+                    if (!kids) t.setTextColor(Cores.tinta)
+                }
+                else -> {
+                    bg.setColor(Color.TRANSPARENT)
+                    bg.setStroke(0, Color.TRANSPARENT)
+                    if (!kids) t.setTextColor(Cores.cinza)
+                }
+            }
+            t.animate().scaleX(if (t.isFocused) 1.06f else 1f).scaleY(if (t.isFocused) 1.06f else 1f).setDuration(120).start()
         }
     }
 
@@ -1079,9 +1132,314 @@ class IptvActivity : Activity() {
         setPadding(dp(2), dp(4), 0, dp(12))
     }
 
+    // ---------- INÍCIO: dois banners grandes + fileiras (como na foto) ----------
+
+    private fun mostrarInicio() {
+        girar?.let { h.removeCallbacks(it) }
+        pararPrevia()
+        titulo.text = "Início"
+        info.text = "Lumi TV" + (Perfil.nome(this)?.let { "  ·  Perfil: $it" } ?: "")
+        // Carrega as duas listas (TV ao vivo e Filmes e Séries) e monta quando chegarem
+        var faltam = 2
+        val pronto = {
+            faltam--
+            if (faltam == 0 && !isFinishing && abaSel == 0) montarInicio()
+        }
+        listOf(Iptv.aoVivo, Iptv.vod).forEach { l ->
+            if (l.link(this) == null || l.canais.isNotEmpty()) pronto() else l.carregar(this, false) { pronto() }
+        }
+    }
+
+    private fun montarInicio() {
+        conteudo.removeAllViews()
+        val filmes = Perfil.filtrar(this, Iptv.vod.daAba(this, 0))
+        val seriesBrutas = Perfil.filtrar(this, Iptv.vod.daAba(this, 1))
+        val series = seriesBrutas.groupBy { Iptv.nomeSerie(it.nome) }
+        val canais = Perfil.filtrar(this, Iptv.aoVivo.daAba(this, 0))
+        if (filmes.isEmpty() && series.isEmpty() && canais.isEmpty()) {
+            vazio("Nenhuma lista ainda.\nAperte OK para colocar os links aqui na TV (ou mande pelo Controle TV).")
+            return
+        }
+        // 1) Dois banners grandes lado a lado
+        val destaques = filmes.take(8).ifEmpty { series.values.map { it.first() }.take(8) }
+        if (destaques.size >= 2) {
+            conteudo.addView(linhaBanners(destaques), LinearLayout.LayoutParams(-1, dp(270)).apply { bottomMargin = dp(22) })
+        }
+        // 2) Fileiras
+        if (canais.isNotEmpty()) fileira("●  Ao vivo agora", canais.take(15), vod = false, eps = null)
+        val cont = Historico.continuar(this)
+        if (cont.isNotEmpty()) fileira("Continuar assistindo", cont.take(15), vod = true, eps = null)
+        if (filmes.isNotEmpty()) fileira("🔥  Filmes em alta", filmes.take(20), vod = true, eps = null)
+        if (series.isNotEmpty()) {
+            val capas = series.map { (nome, eps) -> eps.first().copy(nome = nome) }.take(20)
+            fileira("Séries em alta", capas, vod = true, eps = series)
+        }
+        val esportes = Perfil.filtrar(this, Iptv.aoVivo.daAba(this, 1))
+        if (esportes.isNotEmpty()) fileira("⚽  Esportes", esportes.take(15), vod = false, eps = null)
+        val kids = Perfil.filtrar(this, Iptv.vod.daAba(this, 2))
+        if (kids.isNotEmpty()) fileira("Para a criançada", kids.take(20), vod = true, eps = null)
+    }
+
+    /** Abre um item da tela INÍCIO no player (filme, série ou canal). */
+    private fun tocarItem(c: Iptv.Canal, lista: List<Iptv.Canal>, vod: Boolean, eps: Map<String, List<Iptv.Canal>>?) {
+        Iptv.atual = if (vod) Iptv.vod else Iptv.aoVivo
+        val ep = eps?.get(c.nome)
+        Iptv.fila = ep ?: if (vod) listOf(c) else lista
+        val i = if (ep != null || vod) 0 else lista.indexOf(c).coerceAtLeast(0)
+        startActivity(Intent(this, PlayerActivity::class.java).putExtra("indice", i).putExtra("vod", vod))
+    }
+
+    /** Dois banners grandes, que passam sozinhos a cada 7 segundos. */
+    private fun linhaBanners(itens: List<Iptv.Canal>): View {
+        val linha = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            clipChildren = false
+            clipToPadding = false
+        }
+        var base = 0
+        val slots = (0..1).map { k ->
+            val bg = redondo(Cores.janela, dpf(20))
+            val anel = GradientDrawable().apply {
+                cornerRadius = dpf(20)
+                setColor(Color.TRANSPARENT)
+            }
+            val img = ImageView(this).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+            }
+            // Escurece embaixo e à esquerda para o título aparecer bem
+            val sombra = View(this).apply {
+                background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(0xE607070A.toInt(), 0x0007070A))
+            }
+            val tag = TextView(this).apply {
+                textSize = 12f
+                setTextColor(Color.WHITE)
+                typeface = Typeface.DEFAULT_BOLD
+                letterSpacing = 0.08f
+                background = redondo(0x7307070A, dpf(8)).apply { setStroke(dp(1), 0x40FFFFFF) }
+                setPadding(dp(10), dp(4), dp(10), dp(4))
+            }
+            val tit = TextView(this).apply {
+                textSize = 34f
+                setTextColor(Color.WHITE)
+                typeface = Typeface.create("sans-serif", Typeface.BOLD)
+                maxLines = 2
+                ellipsize = TextUtils.TruncateAt.END
+                setShadowLayer(dpf(10), 0f, dpf(2), 0xCC000000.toInt())
+            }
+            val dica = TextView(this).apply {
+                text = "▶  OK para assistir"
+                textSize = 14f
+                setTextColor(0xD9FFFFFF.toInt())
+                setPadding(0, dp(6), 0, 0)
+            }
+            val textos = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(24), 0, dp(24), dp(22))
+                addView(tit)
+                addView(dica)
+            }
+            val card = FrameLayout(this).apply {
+                background = bg
+                foreground = anel
+                clipToOutline = true
+                elevation = dpf(6)
+                isFocusable = true
+                isClickable = true
+                addView(img, FrameLayout.LayoutParams(-1, -1))
+                addView(sombra, FrameLayout.LayoutParams(-1, -1))
+                addView(tag, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply {
+                    leftMargin = dp(20)
+                    topMargin = dp(18)
+                })
+                addView(textos, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+                setOnFocusChangeListener { v, has ->
+                    anel.setStroke(if (has) dp(4) else 0, Color.WHITE)
+                    v.animate().scaleX(if (has) 1.02f else 1f).scaleY(if (has) 1.02f else 1f).setDuration(160).start()
+                }
+            }
+            linha.addView(card, LinearLayout.LayoutParams(0, -1, 1f).apply { if (k == 0) rightMargin = dp(16) })
+            arrayOf<Any>(card, img, tag, tit)
+        }
+        fun preencher() {
+            slots.forEachIndexed { k, arr ->
+                val c = itens[(base + k) % itens.size]
+                val card = arr[0] as FrameLayout
+                val img = arr[1] as ImageView
+                (arr[2] as TextView).text = c.grupo.uppercase().take(28)
+                (arr[3] as TextView).text = c.nome
+                img.setImageDrawable(null)
+                c.logo?.let { u -> Iptv.logo(u, 700) { b -> if (b != null && (arr[3] as TextView).text == c.nome) img.setImageBitmap(b) } }
+                card.setOnClickListener { tocarItem(c, itens, vod = true, eps = null) }
+            }
+        }
+        preencher()
+        val r = object : Runnable {
+            override fun run() {
+                if (slots.none { (it[0] as View).isFocused }) {
+                    base = (base + 2) % itens.size
+                    preencher()
+                }
+                h.postDelayed(this, 7000)
+            }
+        }
+        girar = r
+        h.postDelayed(r, 7000)
+        return linha
+    }
+
+    /** Uma fileira com título e itens rolando para o lado. */
+    private fun fileira(titulo: String, itens: List<Iptv.Canal>, vod: Boolean, eps: Map<String, List<Iptv.Canal>>?) {
+        conteudo.addView(
+            TextView(this).apply {
+                text = if (titulo.startsWith("●")) {
+                    android.text.SpannableString(titulo).also {
+                        it.setSpan(android.text.style.ForegroundColorSpan(Cores.vivo), 0, 1, 0)
+                    }
+                } else {
+                    titulo
+                }
+                textSize = 19f
+                setTextColor(Cores.tinta)
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(dp(2), dp(6), 0, dp(2))
+            },
+        )
+        val hs = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            clipChildren = false
+            clipToPadding = false
+            setPadding(dp(4), dp(12), dp(4), dp(16))
+        }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            clipChildren = false
+            clipToPadding = false
+        }
+        hs.addView(row)
+        itens.forEachIndexed { i, c ->
+            if (vod) {
+                row.addView(cartazInicio(c, itens, eps), LinearLayout.LayoutParams(dp(132), dp(196)).apply { rightMargin = dp(14) })
+            } else {
+                row.addView(canalInicio(c, itens), LinearLayout.LayoutParams(dp(240), dp(92)).apply { rightMargin = dp(14) })
+            }
+        }
+        conteudo.addView(hs, LinearLayout.LayoutParams(-1, -2))
+    }
+
+    /** Cartaz em pé (filme/série) com o nome por cima, embaixo. */
+    private fun cartazInicio(c: Iptv.Canal, lista: List<Iptv.Canal>, eps: Map<String, List<Iptv.Canal>>?): View {
+        val anel = GradientDrawable().apply {
+            cornerRadius = dpf(14)
+            setColor(Color.TRANSPARENT)
+            setStroke(dp(1), Cores.linha)
+        }
+        val img = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+        val letra = TextView(this).apply {
+            text = c.nome
+            textSize = 15f
+            setTextColor(Cores.tinta)
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setPadding(dp(10), 0, dp(10), 0)
+        }
+        val nome = TextView(this).apply {
+            text = c.nome
+            textSize = 12f
+            setTextColor(Color.WHITE)
+            typeface = Typeface.DEFAULT_BOLD
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+            setShadowLayer(dpf(6), 0f, dpf(1), 0xE6000000.toInt())
+            background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(0xD907070A.toInt(), 0x0007070A))
+            setPadding(dp(8), dp(22), dp(8), dp(8))
+        }
+        val card = FrameLayout(this).apply {
+            background = redondo(Cores.janela, dpf(14))
+            foreground = anel
+            clipToOutline = true
+            elevation = dpf(3)
+            isFocusable = true
+            isClickable = true
+            addView(letra, FrameLayout.LayoutParams(-1, -1))
+            addView(img, FrameLayout.LayoutParams(-1, -1))
+            addView(nome, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+            setOnClickListener { tocarItem(c, lista, vod = true, eps = eps) }
+            setOnFocusChangeListener { v, has ->
+                anel.setStroke(if (has) dp(3) else dp(1), if (has) Color.WHITE else Cores.linha)
+                v.animate().scaleX(if (has) 1.07f else 1f).scaleY(if (has) 1.07f else 1f)
+                    .translationY(if (has) -dpf(6) else 0f).translationZ(if (has) dpf(12) else 0f).setDuration(170).start()
+            }
+        }
+        c.logo?.let { u -> Iptv.logo(u, 320) { b -> if (b != null) { img.setImageBitmap(b); letra.visibility = View.INVISIBLE } } }
+        return card
+    }
+
+    /** Canal ao vivo: logo + nome + grupo, com a etiqueta AO VIVO. */
+    private fun canalInicio(c: Iptv.Canal, lista: List<Iptv.Canal>): View {
+        val bg = redondo(Cores.janela, dpf(14)).apply { setStroke(dp(1), Cores.linha) }
+        val logo = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            background = redondo(Cores.campo, dpf(10))
+            setPadding(dp(6), dp(5), dp(6), dp(5))
+        }
+        val nm = TextView(this).apply {
+            text = c.nome
+            textSize = 14f
+            setTextColor(Cores.tinta)
+            typeface = Typeface.DEFAULT_BOLD
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        val vivo = TextView(this).apply {
+            text = "AO VIVO"
+            textSize = 9f
+            setTextColor(Color.WHITE)
+            typeface = Typeface.DEFAULT_BOLD
+            background = redondo(Cores.vivo, dpf(4))
+            setPadding(dp(5), dp(1), dp(5), dp(1))
+        }
+        val gr = TextView(this).apply {
+            text = c.grupo
+            textSize = 11f
+            setTextColor(Cores.cinza)
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            setPadding(0, dp(3), 0, 0)
+        }
+        val txt = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), 0, 0, 0)
+            addView(vivo, LinearLayout.LayoutParams(-2, -2))
+            addView(nm)
+            addView(gr)
+        }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = bg
+            setPadding(dp(10), dp(10), dp(12), dp(10))
+            isFocusable = true
+            isClickable = true
+            addView(logo, LinearLayout.LayoutParams(dp(78), dp(56)))
+            addView(txt, LinearLayout.LayoutParams(0, -2, 1f))
+            setOnClickListener { tocarItem(c, lista, vod = false, eps = null) }
+            setOnFocusChangeListener { v, has ->
+                bg.setStroke(if (has) dp(3) else dp(1), if (has) Color.WHITE else Cores.linha)
+                v.animate().scaleX(if (has) 1.05f else 1f).scaleY(if (has) 1.05f else 1f)
+                    .translationZ(if (has) dpf(10) else 0f).setDuration(150).start()
+            }
+        }
+        c.logo?.let { u -> Iptv.logo(u) { b -> if (b != null) logo.setImageBitmap(b) } }
+        return card
+    }
+
     // ---------- conteúdo da aba ----------
 
     private fun mostrar() {
+        if (abaSel == 0 && busca == null) mostrarInicio() else mostrarAba()
+    }
+
+    private fun mostrarAba() {
         girar?.let { h.removeCallbacks(it) }
         pararPrevia()
         conteudo.removeAllViews()

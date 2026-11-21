@@ -1,6 +1,7 @@
 package com.geanalves.tvonline
 
 import android.content.Context
+import android.graphics.Color
 import android.view.View
 
 /** Céu azul-noite animado (igual ao Início TV): estrelas, lua, aurora e estrela cadente. */

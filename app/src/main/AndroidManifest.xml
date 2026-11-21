@@ -39,6 +39,13 @@
             android:screenOrientation="landscape"
             android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
 
+        <!-- Painel da Live do jogo (Arena do TikTok) -->
+        <activity
+            android:name=".LiveActivity"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|uiMode"
+            android:exported="false"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
+
         <!-- Links das listas, mandados pelo Controle TV -->
         <receiver
             android:name=".ConfigReceiver"

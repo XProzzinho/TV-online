@@ -630,6 +630,7 @@ class IptvActivity : Activity() {
         AbaTopo("AO VIVO", 0, 0),
         AbaTopo("PLUTO TV", 2, 0),
         AbaTopo("EXPLORAR", 0, 99),
+        AbaTopo("🎵 LIVE", -2, 0), // painel da live do jogo (abre ao apertar OK)
     )
     private var abaSel = 0
 
@@ -673,10 +674,13 @@ class IptvActivity : Activity() {
                 isFocusable = true
                 isClickable = true
                 setOnFocusChangeListener { _, has ->
-                    if (has) selecionarAba(k)
+                    if (has && t.modo != -2) selecionarAba(k)
                     pintarAbas()
                 }
-                setOnClickListener { selecionarAba(k) }
+                setOnClickListener {
+                    if (t.modo == -2) startActivity(Intent(this@IptvActivity, LiveActivity::class.java))
+                    else selecionarAba(k)
+                }
             }
             abas += tv
             abasRow.addView(tv, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(6) })

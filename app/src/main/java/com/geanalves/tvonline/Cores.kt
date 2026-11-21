@@ -34,19 +34,19 @@ object Cores {
     }
 
     // Texto principal e secundário
-    val tinta: Int get() = 0xFFF4F4F6.toInt() // tema Noite profunda
+    val tinta: Int get() = 0xFFF2F5FF.toInt() // tema Céu azul-noite
     private val tintaAntiga: Int get() = if (escuro) 0xFFF2F2F7.toInt() else 0xFF1C1C1E.toInt()
-    val cinza: Int get() = 0xFF8B8B93.toInt()
+    val cinza: Int get() = 0xFF9AA6C0.toInt()
     private val cinzaAntiga: Int get() = if (escuro) 0xFF9A9AA0.toInt() else 0xFF7C7C82.toInt()
 
     /** Cor do texto/ícone em cima de algo pintado com [tinta] (botão selecionado). */
-    val papel: Int get() = 0xFF07070A.toInt()
+    val papel: Int get() = 0xFF0E1626.toInt()
     private val papelAntigo: Int get() = if (escuro) 0xFF1C1C1E.toInt() else 0xFFFFFFFF.toInt()
 
     // Fundo
-    val fundoTopo: Int get() = 0xFF0C0C11.toInt()
+    val fundoTopo: Int get() = 0xFF1B2A45.toInt()
     private val fundoTopoAntigo: Int get() = if (escuro) 0xFF1E1E24.toInt() else 0xFFFFFFFF.toInt()
-    val fundoBase: Int get() = 0xFF07070A.toInt()
+    val fundoBase: Int get() = 0xFF060A14.toInt()
     private val fundoBaseAntigo: Int get() = if (escuro) 0xFF0B0B0F.toInt() else 0xFFF1F1F4.toInt()
     val veu: IntArray
         get() = if (escuro) {
@@ -64,10 +64,10 @@ object Cores {
     private val sutilAntigo: Int get() = if (escuro) 0x1FFFFFFF else 0x1A000000
 
     /** Fundo das janelas e da barrinha do Wi-Fi (branco no claro). */
-    val janela: Int get() = 0xFF141419.toInt()
+    val janela: Int get() = 0xFF1A2438.toInt()
     private val janelaAntiga: Int get() = if (escuro) 0xFF2C2C2E.toInt() else 0xFFFFFFFF.toInt()
 
     /** Botões dentro das janelas. */
-    val campo: Int get() = 0xFF1F1F26.toInt()
+    val campo: Int get() = 0xFF27334D.toInt()
     private val campoAntigo: Int get() = if (escuro) 0xFF3A3A3C.toInt() else 0xFFF2F2F7.toInt()
 }

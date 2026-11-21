@@ -131,7 +131,7 @@ class PlayerActivity : Activity() {
                 }
                 setOnFocusChangeListener { _, has ->
                     bg.setColor(if (has) Color.WHITE else Color.TRANSPARENT)
-                    nm.setTextColor(if (has) 0xFF07070A.toInt() else if (i == indice) Color.WHITE else 0xFFB0B0B8.toInt())
+                    nm.setTextColor(if (has) 0xFF0E1626.toInt() else if (i == indice) Color.WHITE else 0xFFB0B0B8.toInt())
                 }
             }
             caixa.addView(item, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(4) })
@@ -139,7 +139,7 @@ class PlayerActivity : Activity() {
         }
         val sc = ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
-            background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xF207070A.toInt(), 0xCC07070A.toInt()))
+            background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xF2060A14.toInt(), 0xCC060A14.toInt()))
             addView(caixa)
         }
         raiz.addView(sc, FrameLayout.LayoutParams(dp(380), -1, Gravity.START))
@@ -359,7 +359,7 @@ class PlayerActivity : Activity() {
         pular = TextView(this).apply {
             text = "Pular abertura  ▸▸   (OK)"
             textSize = 17f
-            setTextColor(0xFF07070A.toInt())
+            setTextColor(0xFF0E1626.toInt())
             typeface = Typeface.DEFAULT_BOLD
             background = redondo(Color.WHITE, dpf(24))
             setPadding(dp(22), dp(12), dp(22), dp(12))

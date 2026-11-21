@@ -22,7 +22,7 @@ class LiveActivity : Activity() {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         web = WebView(this).apply {
-            setBackgroundColor(Color.parseColor("#0E0818"))
+            setBackgroundColor(Color.parseColor("#0B1426"))
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.mediaPlaybackRequiresUserGesture = false

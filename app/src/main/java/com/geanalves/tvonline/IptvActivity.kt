@@ -476,7 +476,7 @@ class IptvActivity : Activity() {
             gradientType = GradientDrawable.RADIAL_GRADIENT
             gradientRadius = dm.widthPixels * 0.45f
             setGradientCenter(0.0f, 1.0f)
-            colors = intArrayOf(0x1AFF3B30, 0x00000000)
+            colors = intArrayOf(0x14FF3B30, 0x00000000)
         }
         val root = FrameLayout(this).apply {
             background = android.graphics.drawable.LayerDrawable(
@@ -499,6 +499,7 @@ class IptvActivity : Activity() {
             clipToPadding = false
         }
         scroll.addView(col)
+        root.addView(Estrelas(this), FrameLayout.LayoutParams(-1, -1))
         root.addView(scroll, FrameLayout.LayoutParams(-1, -1))
 
         info = TextView(this).apply {
@@ -1212,7 +1213,7 @@ class IptvActivity : Activity() {
             }
             // Escurece embaixo e à esquerda para o título aparecer bem
             val sombra = View(this).apply {
-                background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(0xE607070A.toInt(), 0x0007070A))
+                background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(0xE6060A14.toInt(), 0x00060A14))
             }
             val tag = TextView(this).apply {
                 textSize = 12f
@@ -1354,7 +1355,7 @@ class IptvActivity : Activity() {
             maxLines = 2
             ellipsize = TextUtils.TruncateAt.END
             setShadowLayer(dpf(6), 0f, dpf(1), 0xE6000000.toInt())
-            background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(0xD907070A.toInt(), 0x0007070A))
+            background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(0xD9060A14.toInt(), 0x00060A14))
             setPadding(dp(8), dp(22), dp(8), dp(8))
         }
         val card = FrameLayout(this).apply {

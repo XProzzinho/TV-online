@@ -259,7 +259,7 @@ class ListaM3u(private val chave: String, val vod: Boolean, private val fixo: St
                 val final = filtrar(ler(arq))
                 if (final.isEmpty()) erro = "A lista está vazia" else main.post { canais = final }
             } catch (t: Throwable) {
-                erro = "Não consegui baixar a lista"
+                erro = "Não consegui baixar a lista: " + motivo(t)
             }
             main.post { cb(erro) }
             if (renovarDepois) {
@@ -281,16 +281,55 @@ class ListaM3u(private val chave: String, val vod: Boolean, private val fixo: St
             lista
         }
 
-    private fun baixar(link: String, destino: File) {
+    /** Erro que o usuário entende. */
+    private class ErroLista(msg: String) : java.io.IOException(msg)
+
+    private fun motivo(t: Throwable): String = when (t) {
+        is ErroLista -> t.message ?: "erro desconhecido"
+        is java.net.UnknownHostException -> "sem internet ou o endereço do link está errado"
+        is java.net.SocketTimeoutException -> "o servidor da lista demorou demais pra responder"
+        is java.net.ConnectException -> "o servidor da lista não respondeu (pode estar fora do ar)"
+        is javax.net.ssl.SSLException -> "problema de segurança (https) com o servidor da lista"
+        is java.net.MalformedURLException -> "o link está escrito errado"
+        else -> t.javaClass.simpleName
+    }
+
+    /** Muitos servidores de IPTV só aceitam players conhecidos: tenta com vários "nomes" de player. */
+    private val AGENTES = listOf(
+        "VLC/3.0.21 LibVLC/3.0.21",
+        "IPTVSmartersPro",
+        "Mozilla/5.0 (Linux; Android 11; Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+        "okhttp/4.12.0",
+    )
+
+    private fun baixar(link0: String, destino: File) {
+        var link = link0.trim().replace(" ", "%20")
+        if (!link.startsWith("http://", true) && !link.startsWith("https://", true)) link = "http://$link"
+        var ultimo: Throwable = ErroLista("erro desconhecido")
+        for (ag in AGENTES) {
+            try {
+                baixarCom(link, destino, ag)
+                return
+            } catch (t: Throwable) {
+                ultimo = t
+                // endereço errado ou sem internet: não adianta trocar o player
+                if (t is java.net.UnknownHostException || t is java.net.MalformedURLException) break
+            }
+        }
+        throw ultimo
+    }
+
+    private fun baixarCom(link: String, destino: File, agente: String) {
         var url = URL(link)
         var c: HttpURLConnection
         var pulos = 0
         while (true) {
             c = url.openConnection() as HttpURLConnection
             c.instanceFollowRedirects = false
-            c.connectTimeout = 15000
-            c.readTimeout = 30000
-            c.setRequestProperty("User-Agent", "InicioTV")
+            c.connectTimeout = 20000
+            c.readTimeout = 90000 // listas completas (filmes e séries) podem ser bem grandes
+            c.setRequestProperty("User-Agent", agente)
+            c.setRequestProperty("Accept", "*/*")
             val code = c.responseCode
             if (code in 300..399 && pulos < 8) {
                 url = URL(url, c.getHeaderField("Location"))
@@ -298,12 +337,28 @@ class ListaM3u(private val chave: String, val vod: Boolean, private val fixo: St
                 pulos++
                 continue
             }
-            if (code !in 200..299) throw java.io.IOException("erro $code")
+            if (code !in 200..299) {
+                c.disconnect()
+                throw ErroLista(when (code) {
+                    401, 403, 884 -> "o servidor recusou (usuário/senha errados, vencidos ou bloqueados) — código $code"
+                    404 -> "o link não existe mais no servidor (código 404)"
+                    429 -> "o servidor está bloqueando por excesso de pedidos, tente daqui a pouco (código 429)"
+                    in 500..599 -> "o servidor da lista está com problema (código $code)"
+                    else -> "o servidor respondeu com o código $code"
+                })
+            }
             break
         }
         val tmp = File(destino.parentFile, destino.name + ".tmp")
         c.inputStream.use { e -> tmp.outputStream().use { e.copyTo(it) } }
-        tmp.renameTo(destino)
+        // confere se veio mesmo uma lista (e não uma página de erro do servidor)
+        val ini = tmp.inputStream().use { i -> val b = ByteArray(4096); val n = i.read(b); if (n > 0) String(b, 0, n) else "" }
+        if (!ini.contains("#EXTM3U", true) && !ini.contains("#EXTINF", true)) {
+            tmp.delete()
+            throw ErroLista(if (ini.isBlank()) "o servidor mandou a lista vazia (usuário/senha podem ter vencido)" else "o servidor não mandou uma lista M3U (confira o link, usuário e senha)")
+        }
+        if (destino.exists()) destino.delete()
+        if (!tmp.renameTo(destino)) { tmp.copyTo(destino, true); tmp.delete() }
     }
 
     /** Valor de um atributo (tvg-logo="…") sem usar Regex: bem mais rápido em listas grandes. */
